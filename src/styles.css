@@ -200,8 +200,36 @@ button:hover {
   letter-spacing: 0;
 }
 
-.tracker-stat strong {
-  color: var(--gold);
+#roleLabel {
+  font-size: 21px;
+  line-height: 1;
+}
+
+.health-stat strong {
+  color: #7dff91;
+}
+
+.criminal-pointer {
+  position: fixed;
+  z-index: 7;
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  background: rgba(255, 60, 56, 0.82);
+  box-shadow: 5px 5px 0 rgba(0, 0, 0, 0.55);
+  color: var(--paper);
+  pointer-events: none;
+}
+
+.criminal-pointer span {
+  display: block;
+  font-size: 28px;
+  line-height: 1;
+  transform-origin: center;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.45);
 }
 
 .controls {
