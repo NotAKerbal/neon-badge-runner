@@ -53,6 +53,7 @@ const ramps = [];
 const pedestrians = [];
 const vehicles = [];
 const sparks = [];
+const sparkPool = [];
 const collapseTooltips = [];
 const trafficMats = [];
 let towLine;
@@ -73,11 +74,15 @@ let heat = 0;
 let heatCopTier = 0;
 let remaining = 180;
 let radioTimer = 0;
+let uiTick = 0;
 let roadMap = [];
 let roadCells = [];
 let mapLimit = 245;
 const blockSize = 28;
 const worldCells = 31;
+const collisionGridSize = blockSize * 2;
+const obstacleGrid = new Map();
+const vehicleGrid = new Map();
 const unlocks = {
   copInterceptor: 350,
   copSwat: 900,
@@ -132,10 +137,11 @@ const mats = {
   donut: new THREE.MeshStandardMaterial({ color: 0xffb4cf, emissive: 0x5d1430, roughness: 0.35 })
 };
 
-  for (const color of [0x6f7d87, 0xb6a16e, 0x5e8c61, 0x9b715f, 0xa9b5bd, 0x4d5966]) {
+for (const color of [0x6f7d87, 0xb6a16e, 0x5e8c61, 0x9b715f, 0xa9b5bd, 0x4d5966]) {
   trafficMats.push(new THREE.MeshStandardMaterial({ color, roughness: 0.62 }));
 }
 
+const sparkGeometry = new THREE.SphereGeometry(1, 7, 7);
 const towGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
 towLine = new THREE.Line(towGeometry, new THREE.LineBasicMaterial({ color: 0xf9c74f }));
 towLine.visible = false;
@@ -189,6 +195,13 @@ function makeFlatPanel(w, h, d, mat, x = 0, y = 0, z = 0) {
   return mesh;
 }
 
+function makeGroundBox(w, h, d, mat, x = 0, y = 0, z = 0) {
+  const mesh = makeBox(w, h, d, mat, x, y, z);
+  mesh.castShadow = false;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
 function maxHealthForRole(role, isBus = false) {
   if (isBus) return 260;
   if (role === "cop") return 145;
@@ -217,6 +230,58 @@ function vehicleMass(car) {
 function steerAngleToward(current, target, maxTurn) {
   const delta = THREE.MathUtils.euclideanModulo(target - current + Math.PI, Math.PI * 2) - Math.PI;
   return current + THREE.MathUtils.clamp(delta, -maxTurn, maxTurn);
+}
+
+function collisionKey(x, z) {
+  return `${Math.floor(x / collisionGridSize)},${Math.floor(z / collisionGridSize)}`;
+}
+
+function addToCollisionGrid(grid, item, x, z) {
+  const key = collisionKey(x, z);
+  if (!grid.has(key)) grid.set(key, []);
+  grid.get(key).push(item);
+  return key;
+}
+
+function removeFromCollisionGrid(grid, item, key) {
+  const bucket = grid.get(key);
+  if (!bucket) return;
+  const index = bucket.indexOf(item);
+  if (index >= 0) bucket.splice(index, 1);
+  if (!bucket.length) grid.delete(key);
+}
+
+function nearbyCollisionItems(grid, position) {
+  const gx = Math.floor(position.x / collisionGridSize);
+  const gz = Math.floor(position.z / collisionGridSize);
+  const items = [];
+  for (let x = gx - 1; x <= gx + 1; x++) {
+    for (let z = gz - 1; z <= gz + 1; z++) {
+      const bucket = grid.get(`${x},${z}`);
+      if (bucket) items.push(...bucket);
+    }
+  }
+  return items;
+}
+
+function rebuildObstacleGrid() {
+  obstacleGrid.clear();
+  const worldPos = new THREE.Vector3();
+  for (const obstacle of obstacles) {
+    obstacle.getWorldPosition(worldPos);
+    obstacle.userData.worldX = worldPos.x;
+    obstacle.userData.worldZ = worldPos.z;
+    obstacle.userData.gridKey = addToCollisionGrid(obstacleGrid, obstacle, worldPos.x, worldPos.z);
+  }
+}
+
+function rebuildVehicleGrid() {
+  vehicleGrid.clear();
+  for (let i = 0; i < vehicles.length; i++) {
+    const car = vehicles[i];
+    car.collisionIndex = i;
+    car.gridKey = addToCollisionGrid(vehicleGrid, car, car.group.position.x, car.group.position.z);
+  }
 }
 
 function makeCar(role, controlled = false, tint = null) {
@@ -584,7 +649,7 @@ function clearWorld() {
   for (let i = world.children.length - 1; i >= 0; i--) {
     const child = world.children[i];
     child.traverse((node) => {
-      if (node.geometry) node.geometry.dispose();
+      if (node.geometry && !node.userData?.pooledSpark) node.geometry.dispose();
     });
     world.remove(child);
   }
@@ -595,7 +660,16 @@ function clearWorld() {
   ramps.length = 0;
   pedestrians.length = 0;
   vehicles.length = 0;
+  for (const spark of sparks) {
+    if (!spark.userData.rubble) {
+      spark.visible = false;
+      sparkPool.push(spark);
+    }
+  }
   sparks.length = 0;
+  for (const tip of [...collapseTooltips]) removeCollapseTooltip(tip);
+  obstacleGrid.clear();
+  vehicleGrid.clear();
 }
 
 function isRoadCell(x, z) {
@@ -640,8 +714,7 @@ function generateCity() {
   sun.shadow.camera.bottom = -mapLimit;
   sun.shadow.camera.updateProjectionMatrix();
 
-  const ground = makeBox(citySize, 0.6, citySize, mats.grass, 0, -0.32, 0);
-  ground.receiveShadow = true;
+  const ground = makeGroundBox(citySize, 0.6, citySize, mats.grass, 0, -0.32, 0);
   world.add(ground);
 
   for (let gx = -half; gx <= half; gx++) {
@@ -662,23 +735,22 @@ function generateCity() {
         };
         roadCells.push(cell);
         roadMap.push(cell.position);
-        const roadBase = biome === "desert" ? makeBox(block + 1.2, 0.08, block + 1.2, mats.sand, x, -0.01, z) : biome === "park" ? makeBox(block + 1.2, 0.08, block + 1.2, mats.park, x, -0.01, z) : biome === "neighborhood" ? makeBox(block + 1.2, 0.08, block + 1.2, mats.lawn, x, -0.01, z) : null;
+        const roadBase = biome === "desert" ? makeGroundBox(block + 1.2, 0.08, block + 1.2, mats.sand, x, -0.01, z) : biome === "park" ? makeGroundBox(block + 1.2, 0.08, block + 1.2, mats.park, x, -0.01, z) : biome === "neighborhood" ? makeGroundBox(block + 1.2, 0.08, block + 1.2, mats.lawn, x, -0.01, z) : null;
         if (roadBase) world.add(roadBase);
-        const road = makeBox(block + 1, 0.12, block + 1, mats.road, x, 0.02, z);
-        road.receiveShadow = true;
+        const road = makeGroundBox(block + 1, 0.12, block + 1, mats.road, x, 0.02, z);
         world.add(road);
         if (gx % 3 === 0) {
-          world.add(makeBox(0.45, 0.14, block * 0.55, mats.lane, x, 0.1, z));
+          world.add(makeGroundBox(0.45, 0.14, block * 0.55, mats.lane, x, 0.1, z));
           if (!isIntersection) {
-            world.add(makeBox(3.6, 0.18, block + 0.6, mats.sidewalk, x - block * 0.34, 0.12, z));
-            world.add(makeBox(3.6, 0.18, block + 0.6, mats.sidewalk, x + block * 0.34, 0.12, z));
+            world.add(makeGroundBox(3.6, 0.18, block + 0.6, mats.sidewalk, x - block * 0.34, 0.12, z));
+            world.add(makeGroundBox(3.6, 0.18, block + 0.6, mats.sidewalk, x + block * 0.34, 0.12, z));
           }
         }
         if (gz % 3 === 0) {
-          world.add(makeBox(block * 0.55, 0.14, 0.45, mats.lane, x, 0.1, z));
+          world.add(makeGroundBox(block * 0.55, 0.14, 0.45, mats.lane, x, 0.1, z));
           if (!isIntersection) {
-            world.add(makeBox(block + 0.6, 0.18, 3.6, mats.sidewalk, x, 0.12, z - block * 0.34));
-            world.add(makeBox(block + 0.6, 0.18, 3.6, mats.sidewalk, x, 0.12, z + block * 0.34));
+            world.add(makeGroundBox(block + 0.6, 0.18, 3.6, mats.sidewalk, x, 0.12, z - block * 0.34));
+            world.add(makeGroundBox(block + 0.6, 0.18, 3.6, mats.sidewalk, x, 0.12, z + block * 0.34));
           }
         }
         if (isIntersection) makeCrosswalks(x, z, block);
@@ -692,7 +764,7 @@ function generateCity() {
         const h = rng.range(10, 58);
         const w = rng.range(11, 20);
         const d = rng.range(11, 20);
-        const base = makeBox(block * 0.92, 0.35, block * 0.92, mats.sidewalk, x, 0.08, z);
+        const base = makeGroundBox(block * 0.92, 0.35, block * 0.92, mats.sidewalk, x, 0.08, z);
         const bmat = new THREE.MeshStandardMaterial({
           color: new THREE.Color().setHSL(rng.range(0.03, 0.58), rng.range(0.16, 0.45), rng.range(0.22, 0.44)),
           roughness: 0.72,
@@ -776,6 +848,7 @@ function generateCity() {
     remoteCar = makeCar("criminal", false, mats.remote);
     remoteCar.name = "Remote";
   }
+  rebuildObstacleGrid();
 }
 
 function makeDonutPickup() {
@@ -843,8 +916,7 @@ function addSkyscraperWindows(building, w, h, d) {
 function makePark(x, z, block) {
   const park = new THREE.Group();
   park.position.set(x, 0, z);
-  const base = makeBox(block * 0.92, 0.24, block * 0.92, mats.park, 0, 0.06, 0);
-  base.receiveShadow = true;
+  const base = makeGroundBox(block * 0.92, 0.24, block * 0.92, mats.park, 0, 0.06, 0);
   park.add(base);
 
   if (rng.next() > 0.55) {
@@ -886,7 +958,7 @@ function addPlayground(park, block) {
   const playground = new THREE.Group();
   playground.position.set(rng.range(-block * 0.16, block * 0.16), 0, rng.range(-block * 0.16, block * 0.16));
 
-  const pad = makeBox(13.2, 0.14, 10.2, mats.desertRock, 0, 0.14, 0);
+  const pad = makeGroundBox(13.2, 0.14, 10.2, mats.desertRock, 0, 0.14, 0);
   const slideDeck = makeBox(2.6, 1.1, 2.6, mats.playgroundBlue, -2.8, 1.05, -0.8);
   const slide = makeBox(2.0, 0.22, 5.3, mats.playground, -2.8, 0.72, 2.2);
   slide.rotation.x = -0.32;
@@ -910,9 +982,9 @@ function addPlayground(park, block) {
 function makeNeighborhoodLot(x, z, block) {
   const lot = new THREE.Group();
   lot.position.set(x, 0, z);
-  const lawn = makeBox(block * 0.94, 0.18, block * 0.94, mats.lawn, 0, 0.05, 0);
+  const lawn = makeGroundBox(block * 0.94, 0.18, block * 0.94, mats.lawn, 0, 0.05, 0);
   const drivewaySide = rng.next() > 0.5 ? 1 : -1;
-  const driveway = makeBox(4.6, 0.12, block * 0.62, mats.sidewalk, drivewaySide * block * 0.28, 0.16, -block * 0.05);
+  const driveway = makeGroundBox(4.6, 0.12, block * 0.62, mats.sidewalk, drivewaySide * block * 0.28, 0.16, -block * 0.05);
   lot.add(lawn, driveway);
 
   const house = makeHouse();
@@ -979,8 +1051,7 @@ function addFenceRun(parent, block, fixed, start, end, vertical) {
 function makeDesertPatch(x, z, block) {
   const desert = new THREE.Group();
   desert.position.set(x, 0, z);
-  const base = makeBox(block * 0.96, 0.22, block * 0.96, mats.sand, 0, 0.05, 0);
-  base.receiveShadow = true;
+  const base = makeGroundBox(block * 0.96, 0.22, block * 0.96, mats.sand, 0, 0.05, 0);
   desert.add(base);
 
   if (rng.next() > 0.48) {
@@ -1319,7 +1390,6 @@ function applyStreetDiscipline(car, dt) {
 }
 
 function moveCar(car, dt) {
-  const previous = car.group.position.clone();
   const dir = new THREE.Vector3(Math.sin(car.angle), 0, Math.cos(car.angle));
   car.group.position.addScaledVector(dir, car.speed * dt);
   car.group.rotation.y = car.angle;
@@ -1350,13 +1420,11 @@ function moveCar(car, dt) {
     car.verticalSpeed = 0;
   }
 
-  for (const obstacle of obstacles) {
-    if (car.group.position.y > 2.2) continue;
+  if (car.group.position.y > 2.2) return;
+  for (const obstacle of nearbyCollisionItems(obstacleGrid, car.group.position)) {
     const radius = obstacle.userData.radius || 12;
-    const obstaclePos = new THREE.Vector3();
-    obstacle.getWorldPosition(obstaclePos);
-    const dx = car.group.position.x - obstaclePos.x;
-    const dz = car.group.position.z - obstaclePos.z;
+    const dx = car.group.position.x - (obstacle.userData.worldX ?? obstacle.position.x);
+    const dz = car.group.position.z - (obstacle.userData.worldZ ?? obstacle.position.z);
     const dist = Math.hypot(dx, dz);
     if (dist < radius + car.radius) {
       const impact = Math.abs(car.speed);
@@ -1731,6 +1799,7 @@ function destroyObstacle(obstacle, impactPoint = obstacle.position, sourceCar = 
   if (obstacleIndex >= 0) obstacles.splice(obstacleIndex, 1);
   const buildingIndex = buildings.indexOf(obstacle);
   if (buildingIndex >= 0) buildings.splice(buildingIndex, 1);
+  if (obstacle.userData?.gridKey) removeFromCollisionGrid(obstacleGrid, obstacle, obstacle.userData.gridKey);
 
   const worldPos = new THREE.Vector3();
   obstacle.getWorldPosition(worldPos);
@@ -1879,17 +1948,26 @@ function shake(amount) {
 
 function addSpark(pos, color) {
   if (sparks.length > 55) return;
-  const spark = new THREE.Mesh(new THREE.SphereGeometry(rng.range(0.25, 0.75), 7, 7), new THREE.MeshBasicMaterial({ color }));
+  const spark = sparkPool.pop() || new THREE.Mesh(sparkGeometry, new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }));
+  spark.userData.pooledSpark = true;
+  spark.visible = true;
+  spark.scale.setScalar(rng.range(0.25, 0.75));
+  spark.material.color.setHex(color);
+  spark.material.opacity = 1;
   spark.position.copy(pos);
   spark.position.y = rng.range(1, 3);
   spark.userData.life = 0.45;
   spark.userData.vel = new THREE.Vector3(rng.range(-8, 8), rng.range(3, 12), rng.range(-8, 8));
+  spark.userData.rubble = false;
   sparks.push(spark);
   world.add(spark);
 }
 
 function handleInteractions(dt) {
-  for (const pickup of [...pickups]) {
+  rebuildVehicleGrid();
+
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    const pickup = pickups[i];
     pickup.rotation.z += dt * pickup.userData.spin;
     pickup.position.y = 2.2 + Math.sin(performance.now() * 0.004 + pickup.position.x) * 0.35;
     if (pickup.position.distanceTo(player.group.position) < 6) {
@@ -1904,13 +1982,13 @@ function handleInteractions(dt) {
         announce("Loot scooped. The city budget felt that.");
       }
       world.remove(pickup);
-      pickups.splice(pickups.indexOf(pickup), 1);
+      pickups.splice(i, 1);
     }
   }
 
   for (const pedestrian of pedestrians) {
     if (pedestrian.hitCooldown > 0) continue;
-    for (const car of vehicles) {
+    for (const car of nearbyCollisionItems(vehicleGrid, pedestrian.group.position)) {
       if (car.group.position.y > 2.4 || Math.abs(car.speed) < 8) continue;
       if (pedestrian.group.position.distanceTo(car.group.position) > car.radius + 0.75) continue;
       hitPedestrian(pedestrian, car);
@@ -1921,8 +1999,8 @@ function handleInteractions(dt) {
   for (let i = 0; i < vehicles.length; i++) {
     const a = vehicles[i];
     a.cooldown = Math.max(0, a.cooldown - dt);
-    for (let j = i + 1; j < vehicles.length; j++) {
-      const b = vehicles[j];
+    for (const b of nearbyCollisionItems(vehicleGrid, a.group.position)) {
+      if (b.collisionIndex <= i) continue;
       if (a.group.position.y > 2.6 || b.group.position.y > 2.6) continue;
       const dist = a.group.position.distanceTo(b.group.position);
       if (dist > a.radius + b.radius || a.cooldown > 0 || b.cooldown > 0) continue;
@@ -1944,7 +2022,8 @@ function handleInteractions(dt) {
     }
   }
 
-  for (const spark of [...sparks]) {
+  for (let i = sparks.length - 1; i >= 0; i--) {
+    const spark = sparks[i];
     spark.userData.life -= dt;
     if (spark.userData.vel) {
       spark.position.addScaledVector(spark.userData.vel, dt);
@@ -1954,8 +2033,12 @@ function handleInteractions(dt) {
       spark.material.opacity = Math.max(0, spark.userData.life);
     }
     if (spark.userData.life <= 0) {
-      sparks.splice(sparks.indexOf(spark), 1);
+      sparks.splice(i, 1);
       world.remove(spark);
+      if (!spark.userData.rubble) {
+        spark.visible = false;
+        sparkPool.push(spark);
+      }
     }
   }
 }
@@ -2130,7 +2213,11 @@ function animate() {
     updateHeatCopSpawns();
     handleInteractions(dt);
     updateCamera(dt);
-    updateUi();
+    uiTick += dt;
+    if (uiTick >= 1 / 15) {
+      updateUi();
+      uiTick = 0;
+    }
     sendMultiplayer();
     if (radioTimer > 0) {
       radioTimer -= dt;
