@@ -33,9 +33,17 @@ const ui = {
   time: document.querySelector("#timeLabel"),
   pointer: document.querySelector("#criminalPointer"),
   collapseTips: document.querySelector("#collapseTips"),
+  nameTags: document.querySelector("#nameTags"),
   radio: document.querySelector("#radioText"),
   nitro: document.querySelector("#nitroBar"),
   roleCards: [...document.querySelectorAll(".role-card")],
+  modeCards: [...document.querySelectorAll(".mode-card")],
+  onlineSetup: document.querySelector("#onlineSetup"),
+  playerName: document.querySelector("#playerNameInput"),
+  splashRoom: document.querySelector("#splashRoomInput"),
+  splashHost: document.querySelector("#splashHostBtn"),
+  splashJoin: document.querySelector("#splashJoinBtn"),
+  splashMpStatus: document.querySelector("#splashMpStatus"),
   gameOver: document.querySelector("#gameOver"),
   resultTitle: document.querySelector("#resultTitle"),
   resultText: document.querySelector("#resultText"),
@@ -44,7 +52,9 @@ const ui = {
   join: document.querySelector("#joinBtn"),
   room: document.querySelector("#roomInput"),
   mpStatus: document.querySelector("#mpStatus"),
-  localP2: document.querySelector("#localP2")
+  mpName: document.querySelector("#mpNameInput"),
+  localP2: document.querySelector("#localP2"),
+  multiplayer: document.querySelector(".multiplayer")
 };
 
 const keys = new Set();
@@ -58,6 +68,7 @@ const vehicles = [];
 const sparks = [];
 const sparkPool = [];
 const collapseTooltips = [];
+const nameTags = new Map();
 const trafficMats = [];
 const staticBatches = new Map();
 let towLine;
@@ -66,6 +77,12 @@ let busUnlocked = false;
 let peer;
 let conn;
 let remoteCar;
+const connections = new Map();
+const remotePlayers = new Map();
+let isHost = false;
+let gameMode = "private";
+let localPlayerId = `p${Math.random().toString(36).slice(2, 9)}`;
+let playerName = localStorage.getItem("neon-badge-runner-name") || `Driver${Math.floor(Math.random() * 900 + 100)}`;
 let seed = Math.floor(Math.random() * 999999);
 let selectedRole = "cop";
 let gameStarted = false;
@@ -98,6 +115,52 @@ const unlocks = {
   doubleDecker: 1000,
   criminalBulldozer: 1800
 };
+const peerOptions = {
+  host: "0.peerjs.com",
+  port: 443,
+  path: "/",
+  secure: true,
+  config: {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:global.stun.twilio.com:3478" }
+    ]
+  }
+};
+
+function cleanPlayerName(value) {
+  return (value || "").trim().replace(/\s+/g, " ").slice(0, 16) || "Mystery Driver";
+}
+
+function setPlayerName(value) {
+  playerName = cleanPlayerName(value);
+  localStorage.setItem("neon-badge-runner-name", playerName);
+  if (ui.playerName) ui.playerName.value = playerName;
+  if (ui.mpName) ui.mpName.value = playerName;
+}
+
+function setNetworkStatus(text) {
+  ui.mpStatus.textContent = text;
+  if (ui.splashMpStatus) ui.splashMpStatus.textContent = text;
+}
+
+function isOnlineGame() {
+  return gameMode === "online";
+}
+
+function setGameMode(mode) {
+  gameMode = mode;
+  ui.modeCards.forEach((card) => card.classList.toggle("selected", card.dataset.mode === mode));
+  ui.onlineSetup.classList.toggle("hidden", mode !== "online");
+  ui.start.textContent = mode === "online" ? "Start Online Room" : "Start Chase";
+}
+
+function onlineHumanRoles() {
+  const roles = new Set();
+  if (isOnlineGame()) roles.add(selectedRole);
+  for (const remote of remotePlayers.values()) roles.add(remote.role);
+  return roles;
+}
 
 const world = new THREE.Group();
 scene.add(world);
@@ -289,6 +352,13 @@ function steerAngleToward(current, target, maxTurn) {
 
 function isPlayerActor(actor) {
   return actor === player || actor === player2;
+}
+
+function isRemoteCar(car) {
+  for (const remote of remotePlayers.values()) {
+    if (remote.car === car) return true;
+  }
+  return car === remoteCar;
 }
 
 function collisionKey(x, z) {
@@ -729,6 +799,8 @@ function clearWorld() {
   }
   sparks.length = 0;
   for (const tip of [...collapseTooltips]) removeCollapseTooltip(tip);
+  for (const tag of nameTags.values()) tag.remove();
+  nameTags.clear();
   obstacleGrid.clear();
   vehicleGrid.clear();
 }
@@ -880,7 +952,10 @@ function generateCity() {
   player.group.position.set(0, 0, 0);
 
   const enemyRole = selectedRole === "cop" ? "criminal" : "cop";
-  const cpuRoles = selectedRole === "cop" ? ["criminal", "cop", "cop", "cop"] : ["cop", "cop", "cop", "cop"];
+  const humanRoles = onlineHumanRoles();
+  const cpuRoles = isOnlineGame()
+    ? ["cop", "criminal"].filter((role) => !humanRoles.has(role))
+    : selectedRole === "cop" ? ["criminal", "cop", "cop", "cop"] : ["cop", "cop", "cop", "cop"];
   for (const role of cpuRoles) {
     const car = makeCar(role, false);
     placeCar(car, rng.pick(roadMap));
@@ -904,10 +979,7 @@ function generateCity() {
     player2 = null;
   }
 
-  if (remoteCar) {
-    remoteCar = makeCar("criminal", false, mats.remote);
-    remoteCar.name = "Remote";
-  }
+  for (const remote of remotePlayers.values()) remote.car = null;
   rebuildObstacleGrid();
 }
 
@@ -1574,7 +1646,7 @@ function respawnCar(car, avoid = player.group.position) {
 }
 
 function respawnNpcNearAnchor(car, anchor = player.group.position) {
-  if (car === player || car === player2 || car === remoteCar) return;
+  if (car === player || car === player2 || isRemoteCar(car)) return;
   if (car === towedVehicle) releaseTow("Cable snapped. Target left the district.");
   const angle = rng.range(0, Math.PI * 2);
   const distance = rng.range(95, 185);
@@ -1598,7 +1670,7 @@ function recycleDistantNpcs() {
   const criminal = findCriminalTarget();
   const anchor = criminal?.group.position || player.group.position;
   for (const car of vehicles) {
-    if (car === player || car === player2 || car === remoteCar) continue;
+    if (car === player || car === player2 || isRemoteCar(car)) continue;
     if (car.group.position.distanceTo(anchor) > 420) {
       respawnNpcNearAnchor(car, anchor);
     }
@@ -1618,6 +1690,7 @@ function addScore(points) {
 }
 
 function updateHeatCopSpawns() {
+  if (isOnlineGame() && onlineHumanRoles().has("cop")) return;
   const tier = Math.min(5, Math.floor(heat / 20));
   if (tier <= heatCopTier) return;
   const criminal = findCriminalTarget();
@@ -1670,7 +1743,7 @@ function maybeUpgradePlayerVehicle() {
 }
 
 function resetCpuVehicleLevel(car) {
-  if (car.controlled || car === remoteCar || (car.role !== "cop" && car.role !== "criminal")) return;
+  if (car.controlled || isRemoteCar(car) || (car.role !== "cop" && car.role !== "criminal")) return;
   rebuildDefaultVehicle(car);
   car.vehicleLevel = 1;
   car.npcScore = 0;
@@ -1684,7 +1757,7 @@ function resetCpuVehicleLevel(car) {
 }
 
 function grantNpcUpgradeScore(car, points) {
-  if (!car || car.controlled || car === remoteCar || (car.role !== "cop" && car.role !== "criminal")) return;
+  if (!car || car.controlled || isRemoteCar(car) || (car.role !== "cop" && car.role !== "criminal")) return;
   car.npcScore += points;
   maybeUpgradeNpcVehicle(car);
 }
@@ -1712,7 +1785,7 @@ function toggleTowCable() {
     return;
   }
   const candidates = vehicles
-    .filter((car) => car !== player && car !== player2 && car !== remoteCar)
+    .filter((car) => car !== player && car !== player2 && !isRemoteCar(car))
     .map((car) => ({ car, dist: car.group.position.distanceTo(player.group.position) }))
     .filter((item) => item.dist < 24)
     .sort((a, b) => a.dist - b.dist);
@@ -2234,6 +2307,39 @@ function updateDetailLod(dt) {
   }
 }
 
+function updateNameTags() {
+  if (!isOnlineGame() || !ui.nameTags) {
+    for (const tag of nameTags.values()) tag.style.opacity = "0";
+    return;
+  }
+  const humans = [{ id: localPlayerId, name: playerName, car: player }, ...remotePlayers.values()];
+  const liveIds = new Set();
+  for (const human of humans) {
+    if (!human.car) continue;
+    liveIds.add(human.id);
+    let tag = nameTags.get(human.id);
+    if (!tag) {
+      tag = document.createElement("div");
+      tag.className = "name-tag";
+      ui.nameTags.append(tag);
+      nameTags.set(human.id, tag);
+    }
+    tag.textContent = human.name;
+    const projected = human.car.group.position.clone();
+    projected.y += 6.5;
+    projected.project(camera);
+    const visible = projected.z > -1 && projected.z < 1;
+    tag.style.opacity = visible ? "1" : "0";
+    tag.style.transform = `translate(${(projected.x * 0.5 + 0.5) * window.innerWidth}px, ${(-projected.y * 0.5 + 0.5) * window.innerHeight}px) translate(-50%, -150%)`;
+  }
+  for (const [id, tag] of [...nameTags.entries()]) {
+    if (!liveIds.has(id)) {
+      tag.remove();
+      nameTags.delete(id);
+    }
+  }
+}
+
 function updateUi() {
   const vehicleName = selectedRole === "cop" ? (player.vehicleLevel >= 4 ? "Tank" : player.vehicleLevel >= 3 ? "SWAT" : player.vehicleLevel >= 2 ? "Interceptor" : "Cop") : (player.vehicleLevel >= 4 ? "Dozer" : player.vehicleLevel >= 3 ? "Bus" : player.vehicleLevel >= 2 ? "Muscle" : "Criminal");
   ui.roleLabel.textContent = `${vehicleName} L${player.vehicleLevel}`;
@@ -2338,7 +2444,7 @@ function animate() {
       });
     }
     for (const car of vehicles) {
-      if (!car.controlled && car !== remoteCar) updateCpu(car, dt);
+      if (!car.controlled && !isRemoteCar(car)) updateCpu(car, dt);
     }
     updatePedestrians(dt);
     updateTowCable(dt);
@@ -2360,6 +2466,7 @@ function animate() {
     }
   }
   updateCollapseTooltips(dt);
+  updateNameTags();
   renderer.render(scene, camera);
 }
 
@@ -2371,7 +2478,14 @@ function resize() {
   camera.updateProjectionMatrix();
 }
 
+function startGame(newSeed = false) {
+  ui.splash.classList.add("hidden");
+  gameStarted = true;
+  resetRound(newSeed);
+}
+
 function bindUi() {
+  setPlayerName(playerName);
   ui.roleCards.forEach((button) => {
     button.addEventListener("click", () => {
       selectedRole = button.dataset.role;
@@ -2379,11 +2493,29 @@ function bindUi() {
       resetRound(true);
     });
   });
+  ui.modeCards.forEach((button) => {
+    button.addEventListener("click", () => {
+      setGameMode(button.dataset.mode);
+      if (gameMode === "private") closeNet();
+      resetRound(true);
+    });
+  });
+  ui.playerName.addEventListener("input", () => setPlayerName(ui.playerName.value));
+  ui.mpName.addEventListener("input", () => setPlayerName(ui.mpName.value));
+  ui.splashRoom.addEventListener("input", () => {
+    ui.room.value = ui.splashRoom.value;
+  });
+  ui.room.addEventListener("input", () => {
+    ui.splashRoom.value = ui.room.value;
+  });
 
   ui.start.addEventListener("click", () => {
-    ui.splash.classList.add("hidden");
-    gameStarted = true;
-    resetRound(false);
+    if (gameMode === "online" && !connections.size && !conn?.open) {
+      ui.onlineSetup.classList.remove("hidden");
+      setNetworkStatus("Host a room or enter a code to join before starting online.");
+      return;
+    }
+    startGame(false);
   });
   ui.seed.addEventListener("click", () => resetRound(true));
   ui.reset.addEventListener("click", () => resetRound(true));
@@ -2401,6 +2533,12 @@ function bindUi() {
   ui.localP2.addEventListener("change", () => resetRound(false));
   ui.host.addEventListener("click", hostRoom);
   ui.join.addEventListener("click", joinRoom);
+  ui.splashHost.addEventListener("click", hostRoom);
+  ui.splashJoin.addEventListener("click", joinRoom);
+  ui.multiplayer.querySelector("summary").addEventListener("click", (event) => {
+    event.preventDefault();
+    ui.multiplayer.open = !ui.multiplayer.open;
+  });
 
   window.addEventListener("keydown", (event) => {
     keys.add(event.code);
@@ -2418,73 +2556,217 @@ function bindUi() {
 
 function hostRoom() {
   closeNet();
-  const room = `NBR-${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
-  peer = new Peer(room);
+  setGameMode("online");
+  setPlayerName(ui.playerName.value || ui.mpName.value || playerName);
+  const requestedRoom = normalizeRoomCode(ui.splashRoom.value || ui.room.value);
+  const room = requestedRoom || randomRoomCode();
+  setRoomCodeInputs(room);
+  ui.onlineSetup.classList.remove("hidden");
+  ui.multiplayer.open = true;
+  setNetworkStatus(requestedRoom ? `Claiming ${room.toUpperCase()}...` : `Creating ${room.toUpperCase()}...`);
+  startGame(false);
+  isHost = true;
+  peer = new Peer(room, peerOptions);
   peer.on("open", (id) => {
-    ui.room.value = id;
-    ui.mpStatus.textContent = `Hosting ${id}. Send this code to a friend.`;
+    setRoomCodeInputs(id);
+    ui.mpStatus.textContent = `Hosting ${id.toUpperCase()}. Send this code to a friend.`;
+    setNetworkStatus(`Hosting ${id.toUpperCase()}. Send this code to a friend.`);
   });
   peer.on("connection", (connection) => {
-    conn = connection;
-    wireConnection();
-    ui.mpStatus.textContent = "Friend connected. Rivalry authorized.";
+    registerConnection(connection);
+    setNetworkStatus("Friend connected. Rivalry authorized.");
   });
   peer.on("error", (error) => {
-    ui.mpStatus.textContent = `Network hiccup: ${error.type}`;
+    setNetworkStatus(`Network hiccup: ${describePeerError(error)}`);
+  });
+  peer.on("disconnected", () => {
+    setNetworkStatus("Signal server disconnected. Host again if the room vanished.");
   });
 }
 
 function joinRoom() {
   closeNet();
-  const room = ui.room.value.trim().toUpperCase();
+  setGameMode("online");
+  setPlayerName(ui.playerName.value || ui.mpName.value || playerName);
+  const room = normalizeRoomCode(ui.splashRoom.value || ui.room.value);
   if (!room) {
-    ui.mpStatus.textContent = "Enter a room code first.";
+    setNetworkStatus("Enter a room code first.");
     return;
   }
-  peer = new Peer();
+  setRoomCodeInputs(room);
+  ui.onlineSetup.classList.remove("hidden");
+  ui.multiplayer.open = true;
+  startGame(false);
+  isHost = false;
+  peer = new Peer(undefined, peerOptions);
   peer.on("open", () => {
-    conn = peer.connect(room);
-    wireConnection();
-    ui.mpStatus.textContent = `Joining ${room}...`;
+    conn = peer.connect(room, { reliable: false });
+    registerConnection(conn);
+    setNetworkStatus(`Joining ${room.toUpperCase()}...`);
   });
   peer.on("error", (error) => {
-    ui.mpStatus.textContent = `Network hiccup: ${error.type}`;
+    setNetworkStatus(`Network hiccup: ${describePeerError(error)}`);
+  });
+  peer.on("disconnected", () => {
+    setNetworkStatus("Signal server disconnected. Try Join again.");
   });
 }
 
-function wireConnection() {
-  conn.on("open", () => {
-    ui.mpStatus.textContent = "Online player linked. Yellow car is them.";
-    if (!remoteCar) remoteCar = makeCar("criminal", false, mats.remote);
+function normalizeRoomCode(value) {
+  return (value || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 18);
+}
+
+function randomRoomCode() {
+  return `nbr${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function setRoomCodeInputs(room) {
+  const displayRoom = normalizeRoomCode(room).toUpperCase();
+  ui.room.value = displayRoom;
+  ui.splashRoom.value = displayRoom;
+}
+
+function registerConnection(connection) {
+  connections.set(connection.peer, connection);
+  conn = connection;
+  const onOpen = () => {
+    setNetworkStatus("Online player linked. Yellow cars are other drivers.");
+    sendTo(connection, makeHelloMessage());
+    if (isHost) sendTo(connection, { type: "welcome", seed, players: rosterMessages() });
+  };
+  connection.on("open", onOpen);
+  if (connection.open) onOpen();
+  connection.on("data", (data) => handleMultiplayerData(data, connection));
+  connection.on("close", () => {
+    connections.delete(connection.peer);
+    removeRemotePlayer(connection.peer);
+    setNetworkStatus("Friend disconnected.");
   });
-  conn.on("data", (data) => {
-    if (!remoteCar) remoteCar = makeCar(data.role || "criminal", false, mats.remote);
-    remoteCar.role = data.role || "criminal";
-    remoteCar.group.position.set(data.x, 0, data.z);
-    remoteCar.group.rotation.y = data.a;
-  });
-  conn.on("close", () => {
-    ui.mpStatus.textContent = "Friend disconnected.";
+  connection.on("error", (error) => {
+    setNetworkStatus(`Connection hiccup: ${describePeerError(error)}`);
   });
 }
 
 function sendMultiplayer() {
-  if (!conn?.open) return;
-  conn.send({
+  if (!isOnlineGame() || !connections.size) return;
+  const state = {
+    type: "state",
+    id: localPlayerId,
+    name: playerName,
     role: selectedRole,
     x: player.group.position.x,
     z: player.group.position.z,
     a: player.angle,
     score,
     heat
-  });
+  };
+  broadcast(state);
 }
 
 function closeNet() {
-  if (conn) conn.close();
+  for (const connection of connections.values()) connection.close();
   if (peer) peer.destroy();
+  for (const remote of remotePlayers.values()) {
+    if (remote.car) world.remove(remote.car.group);
+  }
+  connections.clear();
+  remotePlayers.clear();
   conn = null;
   peer = null;
+  remoteCar = null;
+  isHost = false;
+}
+
+function makeHelloMessage() {
+  return { type: "hello", id: localPlayerId, name: playerName, role: selectedRole, seed };
+}
+
+function rosterMessages() {
+  return [
+    makeHelloMessage(),
+    ...[...remotePlayers.values()].map((remote) => ({ type: "hello", id: remote.id, name: remote.name, role: remote.role, seed }))
+  ];
+}
+
+function sendTo(connection, data) {
+  if (connection?.open) connection.send(data);
+}
+
+function broadcast(data, exceptPeer = null) {
+  for (const [peerId, connection] of connections.entries()) {
+    if (peerId !== exceptPeer) sendTo(connection, data);
+  }
+}
+
+function handleMultiplayerData(data, connection) {
+  if (!data?.type) return;
+  if (data.type === "welcome") {
+    if (Number.isFinite(data.seed) && data.seed !== seed) {
+      seed = data.seed;
+      resetRound(false);
+    }
+    for (const playerInfo of data.players || []) {
+      if (playerInfo.id !== localPlayerId) upsertRemotePlayer(playerInfo);
+    }
+    refreshOnlineFillers();
+    return;
+  }
+  if (data.id && data.id !== localPlayerId && (data.type === "hello" || data.type === "state")) {
+    const roleChanged = upsertRemotePlayer(data);
+    if (isHost) broadcast(data, connection?.peer);
+    if (data.type === "hello" || roleChanged) refreshOnlineFillers();
+  }
+}
+
+function upsertRemotePlayer(data) {
+  const id = data.id || data.peer || "remote";
+  let remote = remotePlayers.get(id);
+  const previousRole = remote?.role;
+  if (!remote) {
+    remote = { id, name: cleanPlayerName(data.name || "Remote"), role: data.role || "criminal", car: null };
+    remotePlayers.set(id, remote);
+  }
+  remote.name = cleanPlayerName(data.name || remote.name);
+  remote.role = data.role || remote.role;
+  if (!remote.car || !remote.car.group.parent) {
+    remote.car = makeCar(remote.role, false, mats.remote);
+    remote.car.name = remote.name;
+    remote.car.userData.remotePlayer = true;
+    remoteCar = remote.car;
+  }
+  remote.car.role = remote.role;
+  remote.car.name = remote.name;
+  if (Number.isFinite(data.x) && Number.isFinite(data.z)) {
+    remote.car.group.position.set(data.x, 0, data.z);
+    remote.car.group.rotation.y = data.a || 0;
+    remote.car.angle = data.a || 0;
+  }
+  return previousRole && previousRole !== remote.role;
+}
+
+function removeRemotePlayer(id) {
+  const remote = remotePlayers.get(id);
+  if (!remote) return;
+  if (remote.car) {
+    vehicles.splice(vehicles.indexOf(remote.car), 1);
+    world.remove(remote.car.group);
+  }
+  remotePlayers.delete(id);
+  refreshOnlineFillers();
+}
+
+function refreshOnlineFillers() {
+  if (!isOnlineGame() || !gameStarted) return;
+  resetRound(false);
+}
+
+function describePeerError(error) {
+  if (error?.type === "peer-unavailable") return "room not found. Check the code and make sure the host stays open.";
+  if (error?.type === "unavailable-id") return "that room code is already taken. Try another custom code.";
+  if (error?.type === "invalid-id") return "room codes can only use letters and numbers.";
+  if (error?.type === "network") return "signal server unreachable. Check internet/VPN/firewall.";
+  if (error?.type === "browser-incompatible") return "this browser cannot use WebRTC.";
+  return error?.type || error?.message || "unknown network error";
 }
 
 resize();
