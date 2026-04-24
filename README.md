@@ -1,6 +1,6 @@
 # Neon Badge Runner
 
-A chaotic 3D cop-and-criminal chase simulator built with Three.js, Vite, and PeerJS.
+A chaotic 3D cop-and-criminal chase simulator built with Three.js, Vite, PeerJS fallback networking, and a built-in relay server for real multiplayer rooms.
 
 Choose a side, tear through a city full of traffic, pedestrians, ramps, parks, deserts, neighborhoods, destructible buildings, tow cables, vehicle upgrades, and extremely questionable municipal planning.
 
@@ -13,10 +13,36 @@ npm run dev
 
 Then open the local URL printed by Vite.
 
+For multiplayer across different computers, everyone needs to open the same hosted URL. The default `npm run dev` command now starts the game with its relay server on your machine. Friends on your LAN can join with your computer's network URL, and internet play needs the app deployed somewhere that can run `node server.js`.
+
+## Railway Relay + Vercel Frontend
+
+Railway is the best home for the multiplayer relay because it can run the long-lived Node server.
+
+Railway settings:
+
+```bash
+Build command: npm run build
+Start command: npm run start
+```
+
+After Railway deploys, copy its public URL.
+
+Vercel settings for the frontend:
+
+```bash
+Build command: npm run build
+Output directory: dist
+Environment variable: VITE_RELAY_URL=https://your-railway-app.up.railway.app
+```
+
+If `VITE_RELAY_URL` is not set, the game uses the same origin for `/api/multiplayer`, which is perfect for local development or hosting the whole app on Railway.
+
 ## Build
 
 ```bash
 npm run build
+npm run preview
 ```
 
 ## Credits

@@ -17,6 +17,7 @@ scene.fog = new THREE.Fog(0x101014, 90, 430);
 
 const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 900);
 const clock = new THREE.Clock();
+const relayBaseUrl = (import.meta.env.VITE_RELAY_URL || "").replace(/\/$/, "");
 
 const ui = {
   splash: document.querySelector("#splash"),
@@ -72,11 +73,20 @@ const nameTags = new Map();
 const trafficMats = [];
 const staticBatches = new Map();
 let towLine;
+let helicopter;
+let helicopterCable;
+let helicopterState = null;
+let helicopterCooldown = 0;
 let towedVehicle = null;
 let busUnlocked = false;
 let peer;
 let conn;
 let remoteCar;
+let relaySource;
+let relayRoom;
+let relayConnected = false;
+let relayPostInFlight = false;
+let lastNetworkSend = 0;
 const connections = new Map();
 const remotePlayers = new Map();
 let isHost = false;
@@ -162,6 +172,10 @@ function onlineHumanRoles() {
   return roles;
 }
 
+function onlineLinked() {
+  return relayConnected || connections.size > 0 || Boolean(conn?.open);
+}
+
 const world = new THREE.Group();
 scene.add(world);
 
@@ -211,6 +225,26 @@ for (const color of [0x6f7d87, 0xb6a16e, 0x5e8c61, 0x9b715f, 0xa9b5bd, 0x4d5966]
   trafficMats.push(new THREE.MeshStandardMaterial({ color, roughness: 0.62 }));
 }
 
+function makeHelicopter() {
+  const group = new THREE.Group();
+  const body = makeBox(8.8, 2.4, 4.2, mats.cop, 0, 0, 0);
+  const nose = makeBox(3.1, 1.75, 3.3, mats.glass, 0, 0.35, 2.95);
+  const tail = makeBox(1.1, 0.9, 8.6, mats.cop, 0, 0.3, -6.1);
+  const tailFin = makeBox(2.2, 2.1, 0.45, mats.white, 0, 1.25, -10.25);
+  const mast = makeCylinder(0.22, 0.22, 1.3, mats.tire, 0, 1.55, 0);
+  const rotorA = makeBox(18, 0.18, 0.62, mats.tire, 0, 2.35, 0);
+  const rotorB = makeBox(0.62, 0.18, 18, mats.tire, 0, 2.36, 0);
+  const skidLeft = makeBox(0.38, 0.28, 7.6, mats.white, -3.4, -1.75, 0);
+  const skidRight = makeBox(0.38, 0.28, 7.6, mats.white, 3.4, -1.75, 0);
+  const skidBarA = makeBox(7.1, 0.22, 0.24, mats.white, 0, -1.45, 2.65);
+  const skidBarB = makeBox(7.1, 0.22, 0.24, mats.white, 0, -1.45, -2.65);
+  group.add(body, nose, tail, tailFin, mast, rotorA, rotorB, skidLeft, skidRight, skidBarA, skidBarB);
+  group.userData.rotors = [rotorA, rotorB];
+  group.visible = false;
+  scene.add(group);
+  return group;
+}
+
 const sparkGeometry = new THREE.SphereGeometry(1, 7, 7);
 const windowGeometry = new THREE.BoxGeometry(1, 1, 1);
 const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
@@ -221,6 +255,12 @@ const towGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(
 towLine = new THREE.Line(towGeometry, new THREE.LineBasicMaterial({ color: 0xf9c74f }));
 towLine.visible = false;
 scene.add(towLine);
+
+const helicopterCableGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+helicopterCable = new THREE.Line(helicopterCableGeometry, new THREE.LineBasicMaterial({ color: 0xf5e7b8 }));
+helicopterCable.visible = false;
+scene.add(helicopterCable);
+helicopter = makeHelicopter();
 
 const hemi = new THREE.HemisphereLight(0xf5e7b8, 0x182820, 1.15);
 scene.add(hemi);
@@ -273,6 +313,14 @@ function makeFlatPanel(w, h, d, mat, x = 0, y = 0, z = 0) {
 function makeGroundBox(w, h, d, mat, x = 0, y = 0, z = 0) {
   const mesh = makeBox(w, h, d, mat, x, y, z);
   mesh.castShadow = false;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function makeCylinder(radiusTop, radiusBottom, height, mat, x = 0, y = 0, z = 0) {
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radiusTop, radiusBottom, height, 14), mat);
+  mesh.position.set(x, y, z);
+  mesh.castShadow = true;
   mesh.receiveShadow = true;
   return mesh;
 }
@@ -830,6 +878,10 @@ function generateCity() {
   roadCells = [];
   towedVehicle = null;
   towLine.visible = false;
+  helicopterState = null;
+  helicopterCooldown = 0;
+  helicopter.visible = false;
+  helicopterCable.visible = false;
   busUnlocked = false;
   heatCopTier = Math.floor(heat / 20);
 
@@ -1437,6 +1489,7 @@ function nearestRoadTarget(car) {
 }
 
 function updatePlayer(car, dt, scheme) {
+  if (helicopterState?.car === car) return;
   const forward = keys.has(scheme.up) || keys.has(scheme.upAlt);
   const back = keys.has(scheme.down) || keys.has(scheme.downAlt);
   const left = keys.has(scheme.left) || keys.has(scheme.leftAlt);
@@ -1681,6 +1734,104 @@ function recycleDistantNpcs() {
 
 function findCriminalTarget() {
   return vehicles.find((car) => car.role === "criminal");
+}
+
+function findHelicopterDropPoint(criminal) {
+  if (!criminal) return null;
+  const criminalPos = criminal.group.position;
+  const candidates = roadMap
+    .map((point) => ({ point, dist: point.distanceTo(criminalPos) }))
+    .filter((item) => item.dist > 34 && item.dist < 82)
+    .sort((a, b) => a.dist - b.dist);
+  return (candidates[Math.floor(Math.min(candidates.length - 1, rng.range(0, 5)))]?.point || nearestRoadCell(criminalPos)?.position || criminalPos).clone();
+}
+
+function callPoliceHelicopter() {
+  if (!gameStarted || paused || player.role !== "cop") return;
+  if (helicopterState) {
+    announce("Air unit is already committed. Hold tight.");
+    return;
+  }
+  if (helicopterCooldown > 0) {
+    announce(`Air unit refueling: ${Math.ceil(helicopterCooldown)}s until pickup.`);
+    return;
+  }
+  const criminal = findCriminalTarget();
+  const dropPoint = findHelicopterDropPoint(criminal);
+  if (!criminal || !dropPoint) {
+    announce("Air unit has no criminal lock yet.");
+    return;
+  }
+  const liftPoint = player.group.position.clone();
+  const approach = liftPoint.clone().add(new THREE.Vector3(-70, 42, -70));
+  const depart = dropPoint.clone().add(new THREE.Vector3(70, 44, 70));
+  helicopterState = {
+    car: player,
+    criminal,
+    t: 0,
+    liftPoint,
+    dropPoint,
+    approach,
+    depart,
+    duration: 3.4
+  };
+  helicopter.visible = true;
+  helicopter.position.copy(approach);
+  helicopter.rotation.y = Math.atan2(dropPoint.x - liftPoint.x, dropPoint.z - liftPoint.z);
+  helicopterCable.visible = true;
+  player.speed = 0;
+  player.verticalSpeed = 0;
+  releaseTow("Tow cable released for air pickup.");
+  announce("R called air support. Dispatch chopper is hauling you toward the criminal.");
+  shake(0.28);
+}
+
+function updatePoliceHelicopter(dt) {
+  helicopterCooldown = Math.max(0, helicopterCooldown - dt);
+  if (!helicopterState) {
+    if (helicopter) helicopter.visible = false;
+    helicopterCable.visible = false;
+    return;
+  }
+  const state = helicopterState;
+  state.t += dt;
+  const progress = THREE.MathUtils.clamp(state.t / state.duration, 0, 1);
+  const lift = Math.sin(progress * Math.PI);
+  const hoverHeight = 28 + lift * 16;
+  const travel = new THREE.Vector3().lerpVectors(state.liftPoint, state.dropPoint, THREE.MathUtils.smoothstep(progress, 0, 1));
+  const heliPos = travel.clone().add(new THREE.Vector3(0, hoverHeight, 0));
+  if (progress < 0.14) heliPos.lerp(state.approach, (0.14 - progress) / 0.14);
+  if (progress > 0.86) heliPos.lerp(state.depart, (progress - 0.86) / 0.14);
+  helicopter.position.copy(heliPos);
+  helicopter.rotation.y = Math.atan2(state.dropPoint.x - state.liftPoint.x, state.dropPoint.z - state.liftPoint.z);
+  for (const rotor of helicopter.userData.rotors || []) rotor.rotation.y += dt * 34;
+
+  state.car.group.position.set(travel.x, 5 + lift * 8, travel.z);
+  state.car.angle = helicopter.rotation.y;
+  state.car.group.rotation.y = state.car.angle;
+  state.car.speed = 0;
+  state.car.verticalSpeed = 0;
+
+  helicopterCable.geometry.setFromPoints([
+    helicopter.position.clone().add(new THREE.Vector3(0, -2.1, 0)),
+    state.car.group.position.clone().add(new THREE.Vector3(0, 2.8, 0))
+  ]);
+
+  if (progress >= 1) {
+    state.car.group.position.set(state.dropPoint.x, 0, state.dropPoint.z);
+    const criminalPos = state.criminal?.group?.position || state.dropPoint.clone().add(new THREE.Vector3(0, 0, 1));
+    state.car.angle = Math.atan2(criminalPos.x - state.dropPoint.x, criminalPos.z - state.dropPoint.z);
+    state.car.group.rotation.y = state.car.angle;
+    state.car.speed = 42;
+    state.car.cooldown = 0.4;
+    state.car.rampCooldown = 0.8;
+    helicopterCooldown = 20;
+    helicopterState = null;
+    helicopter.visible = false;
+    helicopterCable.visible = false;
+    announce("Air drop complete. Criminal is nearby. Please exit the sky responsibly.");
+    shake(0.45);
+  }
 }
 
 function addScore(points) {
@@ -2422,6 +2573,7 @@ function animate() {
   if (gameStarted && !paused) {
     remaining -= dt;
     if (remaining <= 0) endGame();
+    updatePoliceHelicopter(dt);
     updatePlayer(player, dt, {
       up: "KeyW",
       upAlt: "ArrowUp",
@@ -2515,7 +2667,7 @@ function bindUi() {
   });
 
   ui.start.addEventListener("click", () => {
-    if (gameMode === "online" && !connections.size && !conn?.open) {
+    if (gameMode === "online" && !onlineLinked()) {
       ui.onlineSetup.classList.remove("hidden");
       setNetworkStatus("Host a room or enter a code to join before starting online.");
       return;
@@ -2554,6 +2706,9 @@ function bindUi() {
     if (event.code === "KeyE" && !event.repeat && gameStarted && !paused) {
       toggleTowCable();
     }
+    if (event.code === "KeyR" && !event.repeat && gameStarted && !paused) {
+      callPoliceHelicopter();
+    }
   });
   window.addEventListener("keyup", (event) => keys.delete(event.code));
   window.addEventListener("resize", resize);
@@ -2571,6 +2726,17 @@ function hostRoom() {
   setNetworkStatus(requestedRoom ? `Claiming ${room.toUpperCase()}...` : `Creating ${room.toUpperCase()}...`);
   startGame(false);
   isHost = true;
+  startRelayHost(room).catch((error) => {
+    if (shouldFallbackToPeer(error)) {
+      setNetworkStatus("Relay server unavailable. Trying direct peer mode...");
+      startPeerHost(room);
+      return;
+    }
+    setNetworkStatus(`Network hiccup: ${describeRelayError(error)}`);
+  });
+}
+
+function startPeerHost(room) {
   peer = new Peer(room, peerOptions);
   peer.on("open", (id) => {
     setRoomCodeInputs(id);
@@ -2603,6 +2769,17 @@ function joinRoom() {
   ui.multiplayer.open = true;
   startGame(false);
   isHost = false;
+  startRelayJoin(room).catch((error) => {
+    if (shouldFallbackToPeer(error)) {
+      setNetworkStatus("Relay server unavailable. Trying direct peer mode...");
+      startPeerJoin(room);
+      return;
+    }
+    setNetworkStatus(`Network hiccup: ${describeRelayError(error)}`);
+  });
+}
+
+function startPeerJoin(room) {
   peer = new Peer(undefined, peerOptions);
   peer.on("open", () => {
     conn = peer.connect(room, { reliable: false });
@@ -2631,6 +2808,93 @@ function setRoomCodeInputs(room) {
   ui.splashRoom.value = displayRoom;
 }
 
+async function relayRequest(action, payload) {
+  let response;
+  try {
+    response = await fetch(`${relayBaseUrl}/api/multiplayer/${action}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  } catch (error) {
+    error.relayUnavailable = true;
+    throw error;
+  }
+  const contentType = response.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    const error = new Error("relay unavailable");
+    error.relayUnavailable = true;
+    throw error;
+  }
+  const data = await response.json();
+  if (!response.ok) {
+    const error = new Error(data.error || "relay request failed");
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+function shouldFallbackToPeer(error) {
+  return error?.relayUnavailable || error?.status === 501 || error?.status === 502 || error?.status === 503 || error?.status === 504;
+}
+
+function describeRelayError(error) {
+  if (error?.status === 404) return "room not found. Check the code and make sure the host stays open.";
+  if (error?.status === 409) return "that room code is already taken. Try another custom code.";
+  return error?.message || "relay server unavailable";
+}
+
+async function startRelayHost(room) {
+  const result = await relayRequest("host", {
+    room,
+    clientId: localPlayerId,
+    seed,
+    player: makeHelloMessage()
+  });
+  relayRoom = result.room;
+  seed = result.seed;
+  openRelayEvents(relayRoom);
+  setRoomCodeInputs(relayRoom);
+  setNetworkStatus(`Hosting ${relayRoom.toUpperCase()} on relay. Send this code and this page URL to friends.`);
+}
+
+async function startRelayJoin(room) {
+  const result = await relayRequest("join", {
+    room,
+    clientId: localPlayerId,
+    player: makeHelloMessage()
+  });
+  relayRoom = result.room;
+  openRelayEvents(relayRoom);
+  handleMultiplayerData({ type: "welcome", seed: result.seed, players: result.players || [] });
+  setRoomCodeInputs(relayRoom);
+  setNetworkStatus(`Joined ${relayRoom.toUpperCase()} on relay.`);
+}
+
+function openRelayEvents(room) {
+  if (relaySource) relaySource.close();
+  relayConnected = false;
+  relaySource = new EventSource(`${relayBaseUrl}/api/multiplayer/events?room=${encodeURIComponent(room)}&clientId=${encodeURIComponent(localPlayerId)}`);
+  relaySource.onopen = () => {
+    relayConnected = true;
+  };
+  relaySource.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === "ping" || data.type === "relay-open") return;
+    if (data.type === "player-left") {
+      removeRemotePlayer(data.id);
+      setNetworkStatus("Online player left the relay.");
+      return;
+    }
+    handleMultiplayerData(data);
+  };
+  relaySource.onerror = () => {
+    if (relayConnected) setNetworkStatus("Relay connection dropped. Rejoin the room if cars stop updating.");
+    relayConnected = false;
+  };
+}
+
 function registerConnection(connection) {
   connections.set(connection.peer, connection);
   conn = connection;
@@ -2653,7 +2917,10 @@ function registerConnection(connection) {
 }
 
 function sendMultiplayer() {
-  if (!isOnlineGame() || !connections.size) return;
+  if (!isOnlineGame()) return;
+  const now = performance.now();
+  if (now - lastNetworkSend < 80) return;
+  lastNetworkSend = now;
   const state = {
     type: "state",
     id: localPlayerId,
@@ -2665,12 +2932,18 @@ function sendMultiplayer() {
     score,
     heat
   };
+  if (relayRoom && relayConnected) {
+    sendRelayMessage(state);
+    return;
+  }
+  if (!connections.size) return;
   broadcast(state);
 }
 
 function closeNet() {
   for (const connection of connections.values()) connection.close();
   if (peer) peer.destroy();
+  if (relaySource) relaySource.close();
   for (const remote of remotePlayers.values()) {
     if (remote.car) world.remove(remote.car.group);
   }
@@ -2678,6 +2951,11 @@ function closeNet() {
   remotePlayers.clear();
   conn = null;
   peer = null;
+  relaySource = null;
+  relayRoom = null;
+  relayConnected = false;
+  relayPostInFlight = false;
+  lastNetworkSend = 0;
   remoteCar = null;
   isHost = false;
 }
@@ -2695,6 +2973,19 @@ function rosterMessages() {
 
 function sendTo(connection, data) {
   if (connection?.open) connection.send(data);
+}
+
+function sendRelayMessage(message) {
+  if (!relayRoom || relayPostInFlight) return;
+  relayPostInFlight = true;
+  relayRequest("message", { room: relayRoom, clientId: localPlayerId, message })
+    .catch(() => {
+      relayConnected = false;
+      setNetworkStatus("Relay send failed. Rejoin the room if the chase froze.");
+    })
+    .finally(() => {
+      relayPostInFlight = false;
+    });
 }
 
 function broadcast(data, exceptPeer = null) {
@@ -2736,7 +3027,7 @@ function upsertRemotePlayer(data) {
   if (!remote.car || !remote.car.group.parent) {
     remote.car = makeCar(remote.role, false, mats.remote);
     remote.car.name = remote.name;
-    remote.car.userData.remotePlayer = true;
+    remote.car.group.userData.remotePlayer = true;
     remoteCar = remote.car;
   }
   remote.car.role = remote.role;
