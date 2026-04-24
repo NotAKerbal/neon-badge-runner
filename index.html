@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Neon Badge Runner</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game"></canvas>
+
+      <section id="splash" class="splash">
+        <div class="brand">
+          <span class="kicker">Procedural 3D chase simulator</span>
+          <h1>Neon Badge Runner</h1>
+          <p>Pick a side, punch the siren, and tear through a city that rebuilds itself every round.</p>
+        </div>
+        <div class="role-grid">
+          <button class="role-card cop selected" data-role="cop">
+            <strong>Cop</strong>
+            <span>Ram criminals to capture them, chain arrests, protect the donut convoy.</span>
+          </button>
+          <button class="role-card criminal" data-role="criminal">
+            <strong>Criminal</strong>
+            <span>Grab loot, jump ramps, lose the heat, humiliate the badge brigade.</span>
+          </button>
+        </div>
+        <div class="setup-row">
+          <button id="startBtn" class="primary">Start Chase</button>
+          <button id="seedBtn" class="secondary">New City</button>
+        </div>
+      </section>
+
+      <aside class="hud">
+        <div class="stat">
+          <span>Role</span>
+          <strong id="roleLabel">Cop</strong>
+        </div>
+        <div class="stat">
+          <span>Score</span>
+          <strong id="scoreLabel">0</strong>
+        </div>
+        <div class="stat">
+          <span>Total</span>
+          <strong id="totalScoreLabel">0</strong>
+        </div>
+        <div class="stat">
+          <span>Heat</span>
+          <strong id="heatLabel">0</strong>
+        </div>
+        <div class="stat">
+          <span>Clock</span>
+          <strong id="timeLabel">03:00</strong>
+        </div>
+        <div class="stat tracker-stat">
+          <span>APB</span>
+          <strong id="trackerLabel">--</strong>
+        </div>
+      </aside>
+
+      <aside class="controls">
+        <button id="pauseBtn" title="Pause">II</button>
+        <button id="resetBtn" title="Reset city">↻</button>
+        <button id="camBtn" title="Camera">◉</button>
+      </aside>
+
+      <section class="radio">
+        <div id="radioText">Choose your badge or your bad idea.</div>
+        <div class="meters">
+          <span id="nitroBar"></span>
+        </div>
+      </section>
+
+      <section class="multiplayer">
+        <div class="panel-title">Multiplayer</div>
+        <div class="mp-row">
+          <button id="hostBtn">Host</button>
+          <input id="roomInput" placeholder="room code" autocomplete="off" />
+          <button id="joinBtn">Join</button>
+        </div>
+        <label class="toggle">
+          <input id="localP2" type="checkbox" />
+          <span>Local P2</span>
+        </label>
+        <p id="mpStatus">Solo chaos online.</p>
+      </section>
+
+      <section id="gameOver" class="game-over hidden">
+        <span>Shift complete</span>
+        <h2 id="resultTitle">Nice work.</h2>
+        <p id="resultText"></p>
+        <button id="againBtn" class="primary">Run It Back</button>
+      </section>
+    </div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
