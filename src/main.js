@@ -1,10 +1,13 @@
 import "./styles.css";
 import * as THREE from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { Peer } from "peerjs";
 
 const canvas = document.querySelector("#game");
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.8));
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: "high-performance" });
+const maxPixelRatio = Math.min(window.devicePixelRatio, 1.35);
+let currentPixelRatio = maxPixelRatio;
+renderer.setPixelRatio(currentPixelRatio);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
@@ -56,6 +59,7 @@ const sparks = [];
 const sparkPool = [];
 const collapseTooltips = [];
 const trafficMats = [];
+const staticBatches = new Map();
 let towLine;
 let towedVehicle = null;
 let busUnlocked = false;
@@ -75,6 +79,9 @@ let heatCopTier = 0;
 let remaining = 180;
 let radioTimer = 0;
 let uiTick = 0;
+let perfSampleTime = 0;
+let perfSampleFrames = 0;
+let detailLodTick = 0;
 let roadMap = [];
 let roadCells = [];
 let mapLimit = 245;
@@ -142,6 +149,11 @@ for (const color of [0x6f7d87, 0xb6a16e, 0x5e8c61, 0x9b715f, 0xa9b5bd, 0x4d5966]
 }
 
 const sparkGeometry = new THREE.SphereGeometry(1, 7, 7);
+const windowGeometry = new THREE.BoxGeometry(1, 1, 1);
+const rockGeometry = new THREE.DodecahedronGeometry(1, 0);
+sparkGeometry.userData.shared = true;
+windowGeometry.userData.shared = true;
+rockGeometry.userData.shared = true;
 const towGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
 towLine = new THREE.Line(towGeometry, new THREE.LineBasicMaterial({ color: 0xf9c74f }));
 towLine.visible = false;
@@ -157,7 +169,7 @@ sun.shadow.camera.left = -180;
 sun.shadow.camera.right = 180;
 sun.shadow.camera.top = 180;
 sun.shadow.camera.bottom = -180;
-sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.mapSize.set(1024, 1024);
 scene.add(sun);
 
 const rng = (function makeRng() {
@@ -200,6 +212,49 @@ function makeGroundBox(w, h, d, mat, x = 0, y = 0, z = 0) {
   mesh.castShadow = false;
   mesh.receiveShadow = true;
   return mesh;
+}
+
+function setShadowRecursive(object, castShadow, receiveShadow = true) {
+  object.traverse((node) => {
+    if (!node.isMesh) return;
+    node.castShadow = castShadow;
+    node.receiveShadow = receiveShadow;
+  });
+}
+
+function setTinyDetailVisibility(object, anchor, showDistance) {
+  if (!object) return;
+  const target = anchor || player?.group?.position;
+  object.visible = !target || object.position.distanceTo(target) < showDistance;
+}
+
+function addStaticBox(w, h, d, mat, x = 0, y = 0, z = 0) {
+  const geometry = new THREE.BoxGeometry(w, h, d);
+  geometry.applyMatrix4(new THREE.Matrix4().makeTranslation(x, y, z));
+  if (!staticBatches.has(mat)) staticBatches.set(mat, []);
+  staticBatches.get(mat).push(geometry);
+}
+
+function flushStaticBatches() {
+  for (const [mat, geometries] of staticBatches.entries()) {
+    if (!geometries.length) continue;
+    const merged = mergeGeometries(geometries, false);
+    for (const geometry of geometries) geometry.dispose();
+    if (!merged) continue;
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    mesh.frustumCulled = false;
+    world.add(mesh);
+  }
+  staticBatches.clear();
+}
+
+function clearStaticBatches() {
+  for (const geometries of staticBatches.values()) {
+    for (const geometry of geometries) geometry.dispose();
+  }
+  staticBatches.clear();
 }
 
 function maxHealthForRole(role, isBus = false) {
@@ -353,6 +408,7 @@ function makeCar(role, controlled = false, tint = null) {
     }
   }
 
+  if (role === "traffic") setShadowRecursive(group, false, true);
   world.add(group);
   const car = {
     group,
@@ -646,10 +702,11 @@ function rebuildDefaultVehicle(car) {
 }
 
 function clearWorld() {
+  clearStaticBatches();
   for (let i = world.children.length - 1; i >= 0; i--) {
     const child = world.children[i];
     child.traverse((node) => {
-      if (node.geometry && !node.userData?.pooledSpark) node.geometry.dispose();
+      if (node.geometry && !node.userData?.pooledSpark && !node.geometry.userData?.shared) node.geometry.dispose();
     });
     world.remove(child);
   }
@@ -714,8 +771,7 @@ function generateCity() {
   sun.shadow.camera.bottom = -mapLimit;
   sun.shadow.camera.updateProjectionMatrix();
 
-  const ground = makeGroundBox(citySize, 0.6, citySize, mats.grass, 0, -0.32, 0);
-  world.add(ground);
+  addStaticBox(citySize, 0.6, citySize, mats.grass, 0, -0.32, 0);
 
   for (let gx = -half; gx <= half; gx++) {
     for (let gz = -half; gz <= half; gz++) {
@@ -735,22 +791,21 @@ function generateCity() {
         };
         roadCells.push(cell);
         roadMap.push(cell.position);
-        const roadBase = biome === "desert" ? makeGroundBox(block + 1.2, 0.08, block + 1.2, mats.sand, x, -0.01, z) : biome === "park" ? makeGroundBox(block + 1.2, 0.08, block + 1.2, mats.park, x, -0.01, z) : biome === "neighborhood" ? makeGroundBox(block + 1.2, 0.08, block + 1.2, mats.lawn, x, -0.01, z) : null;
-        if (roadBase) world.add(roadBase);
-        const road = makeGroundBox(block + 1, 0.12, block + 1, mats.road, x, 0.02, z);
-        world.add(road);
+        const roadBaseMat = biome === "desert" ? mats.sand : biome === "park" ? mats.park : biome === "neighborhood" ? mats.lawn : null;
+        if (roadBaseMat) addStaticBox(block + 1.2, 0.08, block + 1.2, roadBaseMat, x, -0.01, z);
+        addStaticBox(block + 1, 0.12, block + 1, mats.road, x, 0.02, z);
         if (gx % 3 === 0) {
-          world.add(makeGroundBox(0.45, 0.14, block * 0.55, mats.lane, x, 0.1, z));
+          addStaticBox(0.45, 0.14, block * 0.55, mats.lane, x, 0.1, z);
           if (!isIntersection) {
-            world.add(makeGroundBox(3.6, 0.18, block + 0.6, mats.sidewalk, x - block * 0.34, 0.12, z));
-            world.add(makeGroundBox(3.6, 0.18, block + 0.6, mats.sidewalk, x + block * 0.34, 0.12, z));
+            addStaticBox(3.6, 0.18, block + 0.6, mats.sidewalk, x - block * 0.34, 0.12, z);
+            addStaticBox(3.6, 0.18, block + 0.6, mats.sidewalk, x + block * 0.34, 0.12, z);
           }
         }
         if (gz % 3 === 0) {
-          world.add(makeGroundBox(block * 0.55, 0.14, 0.45, mats.lane, x, 0.1, z));
+          addStaticBox(block * 0.55, 0.14, 0.45, mats.lane, x, 0.1, z);
           if (!isIntersection) {
-            world.add(makeGroundBox(block + 0.6, 0.18, 3.6, mats.sidewalk, x, 0.12, z - block * 0.34));
-            world.add(makeGroundBox(block + 0.6, 0.18, 3.6, mats.sidewalk, x, 0.12, z + block * 0.34));
+            addStaticBox(block + 0.6, 0.18, 3.6, mats.sidewalk, x, 0.12, z - block * 0.34);
+            addStaticBox(block + 0.6, 0.18, 3.6, mats.sidewalk, x, 0.12, z + block * 0.34);
           }
         }
         if (isIntersection) makeCrosswalks(x, z, block);
@@ -764,7 +819,7 @@ function generateCity() {
         const h = rng.range(10, 58);
         const w = rng.range(11, 20);
         const d = rng.range(11, 20);
-        const base = makeGroundBox(block * 0.92, 0.35, block * 0.92, mats.sidewalk, x, 0.08, z);
+        addStaticBox(block * 0.92, 0.35, block * 0.92, mats.sidewalk, x, 0.08, z);
         const bmat = new THREE.MeshStandardMaterial({
           color: new THREE.Color().setHSL(rng.range(0.03, 0.58), rng.range(0.16, 0.45), rng.range(0.22, 0.44)),
           roughness: 0.72,
@@ -779,7 +834,7 @@ function generateCity() {
         building.userData.collapseKind = h > 40 ? "skyscraper" : "building";
         buildings.push(building);
         obstacles.push(building);
-        world.add(base, building);
+        world.add(building);
 
         const signColor = rng.pick([mats.cop, mats.criminal, mats.loot, mats.glass]) || mats.glass;
         if (rng.next() > 0.45) {
@@ -789,6 +844,7 @@ function generateCity() {
       }
     }
   }
+  flushStaticBatches();
 
   const rampCells = roadCells.filter((cell) => !cell.isIntersection && (cell.gx % 3 === 0 || cell.gz % 3 === 0));
   for (let i = 0; i < 24; i++) {
@@ -803,7 +859,7 @@ function generateCity() {
     const pickup = selectedRole === "cop" ? makeDonutPickup() : makeCashPickup();
     pickup.position.set(p.x + rng.range(-7, 7), 2.2, p.z + rng.range(-7, 7));
     if (selectedRole === "cop") pickup.rotation.x = Math.PI / 2;
-    pickup.castShadow = true;
+    setShadowRecursive(pickup, false, true);
     pickup.userData.spin = rng.range(-2.5, 2.5);
     pickups.push(pickup);
     world.add(pickup);
@@ -880,10 +936,10 @@ function makeCrosswalks(x, z, block) {
   const inset = block * 0.36;
   for (let i = 0; i < stripeCount; i++) {
     const offset = (i - (stripeCount - 1) / 2) * stripeGap;
-    world.add(makeFlatPanel(stripeWidth, 0.08, stripeLength, mats.crosswalk, x + offset, 0.18, z - inset));
-    world.add(makeFlatPanel(stripeWidth, 0.08, stripeLength, mats.crosswalk, x + offset, 0.18, z + inset));
-    world.add(makeFlatPanel(stripeLength, 0.08, stripeWidth, mats.crosswalk, x - inset, 0.18, z + offset));
-    world.add(makeFlatPanel(stripeLength, 0.08, stripeWidth, mats.crosswalk, x + inset, 0.18, z + offset));
+    addStaticBox(stripeWidth, 0.08, stripeLength, mats.crosswalk, x + offset, 0.18, z - inset);
+    addStaticBox(stripeWidth, 0.08, stripeLength, mats.crosswalk, x + offset, 0.18, z + inset);
+    addStaticBox(stripeLength, 0.08, stripeWidth, mats.crosswalk, x - inset, 0.18, z + offset);
+    addStaticBox(stripeLength, 0.08, stripeWidth, mats.crosswalk, x + inset, 0.18, z + offset);
   }
 }
 
@@ -895,21 +951,39 @@ function addSkyscraperWindows(building, w, h, d) {
   const startY = -h / 2 + 4.2;
   const rowStep = (h - 7) / rows;
   const litPalette = [mats.windowLit, mats.windowCool, mats.windowDark];
+  const instanceData = new Map(litPalette.map((mat) => [mat, []]));
+  const matrix = new THREE.Matrix4();
+
+  function addWindow(mat, x, y, z, sx, sy, sz) {
+    matrix.compose(new THREE.Vector3(x, y, z), new THREE.Quaternion(), new THREE.Vector3(sx, sy, sz));
+    instanceData.get(mat).push(matrix.clone());
+  }
 
   for (let row = 0; row < rows; row++) {
     const y = startY + row * rowStep;
     for (let col = 0; col < frontCols; col++) {
       const x = ((col + 0.5) / frontCols - 0.5) * w * 0.72;
       const mat = rng.pick(litPalette);
-      building.add(makeFlatPanel(0.92, 0.62, 0.08, mat, x, y, -d / 2 - 0.05));
-      building.add(makeFlatPanel(0.92, 0.62, 0.08, mat, x, y, d / 2 + 0.05));
+      addWindow(mat, x, y, -d / 2 - 0.05, 0.92, 0.62, 0.08);
+      addWindow(mat, x, y, d / 2 + 0.05, 0.92, 0.62, 0.08);
     }
     for (let col = 0; col < sideCols; col++) {
       const z = ((col + 0.5) / sideCols - 0.5) * d * 0.72;
       const mat = rng.pick(litPalette);
-      building.add(makeFlatPanel(0.08, 0.62, 0.92, mat, -w / 2 - 0.05, y, z));
-      building.add(makeFlatPanel(0.08, 0.62, 0.92, mat, w / 2 + 0.05, y, z));
+      addWindow(mat, -w / 2 - 0.05, y, z, 0.08, 0.62, 0.92);
+      addWindow(mat, w / 2 + 0.05, y, z, 0.08, 0.62, 0.92);
     }
+  }
+
+  for (const [mat, matrices] of instanceData.entries()) {
+    if (!matrices.length) continue;
+    const windows = new THREE.InstancedMesh(windowGeometry, mat, matrices.length);
+    for (let i = 0; i < matrices.length; i++) windows.setMatrixAt(i, matrices[i]);
+    windows.instanceMatrix.needsUpdate = true;
+    windows.castShadow = false;
+    windows.receiveShadow = false;
+    windows.userData.detailLod = "windows";
+    building.add(windows);
   }
 }
 
@@ -936,9 +1010,10 @@ function makePark(x, z, block) {
     const trunk = makeBox(0.9, rng.range(2, 3.5), 0.9, mats.trunk, 0, 1.1, 0);
     const crown = new THREE.Mesh(new THREE.DodecahedronGeometry(rng.range(1.8, 2.8), 0), mats.tree);
     crown.position.set(0, trunk.position.y + rng.range(1.4, 2.2), 0);
-    crown.castShadow = true;
+    crown.castShadow = false;
     crown.receiveShadow = true;
     tree.add(trunk, crown);
+    setShadowRecursive(tree, false, true);
     tree.position.set(rng.range(-block * 0.34, block * 0.34), 0, rng.range(-block * 0.34, block * 0.34));
     tree.userData.radius = 1.8;
     tree.userData.maxHealth = 35;
@@ -1071,14 +1146,22 @@ function makeDesertPatch(x, z, block) {
     desert.add(cactus);
   }
 
-  for (let i = 0; i < rng.range(4, 9); i++) {
-    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(rng.range(0.8, 1.8), 0), mats.desertRock);
-    rock.position.set(rng.range(-block * 0.4, block * 0.4), rng.range(0.25, 0.6), rng.range(-block * 0.4, block * 0.4));
-    rock.rotation.set(rng.range(-0.3, 0.3), rng.range(0, Math.PI), rng.range(-0.3, 0.3));
-    rock.castShadow = true;
-    rock.receiveShadow = true;
-    desert.add(rock);
+  const rockCount = Math.floor(rng.range(4, 9));
+  const rocks = new THREE.InstancedMesh(rockGeometry, mats.desertRock, rockCount);
+  const rockMatrix = new THREE.Matrix4();
+  for (let i = 0; i < rockCount; i++) {
+    rockMatrix.compose(
+      new THREE.Vector3(rng.range(-block * 0.4, block * 0.4), rng.range(0.25, 0.6), rng.range(-block * 0.4, block * 0.4)),
+      new THREE.Quaternion().setFromEuler(new THREE.Euler(rng.range(-0.3, 0.3), rng.range(0, Math.PI), rng.range(-0.3, 0.3))),
+      new THREE.Vector3().setScalar(rng.range(0.8, 1.8))
+    );
+    rocks.setMatrixAt(i, rockMatrix);
   }
+  rocks.instanceMatrix.needsUpdate = true;
+  rocks.castShadow = false;
+  rocks.receiveShadow = true;
+  rocks.userData.detailLod = "small-props";
+  desert.add(rocks);
 
   parks.push(desert);
   world.add(desert);
@@ -1112,7 +1195,7 @@ function makeCactus() {
   const height = rng.range(4.2, 7.4);
   const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.72, height, 10), mats.cactus);
   trunk.position.y = height / 2;
-  trunk.castShadow = true;
+  trunk.castShadow = false;
   cactus.add(trunk);
 
   for (const side of [-1, 1]) {
@@ -1122,13 +1205,14 @@ function makeCactus() {
     const horizontal = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 2.2, 8), mats.cactus);
     horizontal.rotation.z = Math.PI / 2;
     horizontal.position.set(side * 1.08, armHeight, 0);
-    horizontal.castShadow = true;
+    horizontal.castShadow = false;
     const vertical = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, upper, 8), mats.cactus);
     vertical.position.set(side * 2.05, armHeight + upper * 0.45, 0);
-    vertical.castShadow = true;
+    vertical.castShadow = false;
     cactus.add(horizontal, vertical);
   }
 
+  setShadowRecursive(cactus, false, true);
   return cactus;
 }
 
@@ -1221,12 +1305,13 @@ function makePedestrian(cell) {
   const shirt = rng.next() > 0.5 ? mats.pedestrianBright : rng.pick([mats.cop, mats.criminal, mats.gold]);
   const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.42, 1.15, 4, 8), shirt);
   body.position.y = 1.25;
-  body.castShadow = true;
+  body.castShadow = false;
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.42, 10, 10), mats.pedestrianSkin);
   head.position.y = 2.25;
-  head.castShadow = true;
+  head.castShadow = false;
   const hat = makeBox(0.72, 0.16, 0.72, mats.pedestrianDark, 0, 2.63, 0);
   group.add(body, head, hat);
+  setShadowRecursive(group, false, true);
 
   const pedestrian = {
     group,
@@ -2101,6 +2186,52 @@ function updateCollapseTooltips(dt) {
   }
 }
 
+function updatePerformanceBudget(dt) {
+  perfSampleTime += dt;
+  perfSampleFrames += 1;
+  if (perfSampleTime < 2) return;
+  const fps = perfSampleFrames / perfSampleTime;
+  const nextRatio = fps < 45 ? Math.max(1, currentPixelRatio - 0.15) : fps > 58 ? Math.min(maxPixelRatio, currentPixelRatio + 0.1) : currentPixelRatio;
+  if (Math.abs(nextRatio - currentPixelRatio) > 0.01) {
+    currentPixelRatio = nextRatio;
+    renderer.setPixelRatio(currentPixelRatio);
+  }
+  perfSampleTime = 0;
+  perfSampleFrames = 0;
+}
+
+function updateDetailLod(dt) {
+  detailLodTick += dt;
+  if (detailLodTick < 0.35) return;
+  detailLodTick = 0;
+  const anchor = player?.group?.position || camera.position;
+  const pedestrianLimitSq = 240 * 240;
+  const trafficLimitSq = 360 * 360;
+  const windowLimitSq = 310 * 310;
+  const propLimitSq = 280 * 280;
+  const worldPos = new THREE.Vector3();
+
+  for (const pedestrian of pedestrians) {
+    pedestrian.group.visible = pedestrian.group.position.distanceToSquared(anchor) < pedestrianLimitSq;
+  }
+  for (const car of vehicles) {
+    if (car.role === "traffic") car.group.visible = car.group.position.distanceToSquared(anchor) < trafficLimitSq;
+  }
+  for (const building of buildings) {
+    const showWindows = building.position.distanceToSquared(anchor) < windowLimitSq;
+    for (const child of building.children) {
+      if (child.userData?.detailLod === "windows") child.visible = showWindows;
+    }
+  }
+  for (const park of parks) {
+    for (const child of park.children) {
+      if (!child.userData?.detailLod) continue;
+      child.getWorldPosition(worldPos);
+      child.visible = worldPos.distanceToSquared(anchor) < propLimitSq;
+    }
+  }
+}
+
 function updateUi() {
   const vehicleName = selectedRole === "cop" ? (player.vehicleLevel >= 4 ? "Tank" : player.vehicleLevel >= 3 ? "SWAT" : player.vehicleLevel >= 2 ? "Interceptor" : "Cop") : (player.vehicleLevel >= 4 ? "Dozer" : player.vehicleLevel >= 3 ? "Bus" : player.vehicleLevel >= 2 ? "Muscle" : "Criminal");
   ui.roleLabel.textContent = `${vehicleName} L${player.vehicleLevel}`;
@@ -2213,12 +2344,14 @@ function animate() {
     updateHeatCopSpawns();
     handleInteractions(dt);
     updateCamera(dt);
+    updateDetailLod(dt);
     uiTick += dt;
     if (uiTick >= 1 / 15) {
       updateUi();
       uiTick = 0;
     }
     sendMultiplayer();
+    updatePerformanceBudget(dt);
     if (radioTimer > 0) {
       radioTimer -= dt;
       if (radioTimer <= 0) ui.radio.textContent = selectedRole === "cop" ? "Donuts heal. Total score unlocks Interceptor, SWAT, and Tank tiers." : "Total score unlocks Muscle, Bus, and Bulldozer tiers.";
