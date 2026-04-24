@@ -1441,21 +1441,23 @@ function updatePlayer(car, dt, scheme) {
   const back = keys.has(scheme.down) || keys.has(scheme.downAlt);
   const left = keys.has(scheme.left) || keys.has(scheme.leftAlt);
   const right = keys.has(scheme.right) || keys.has(scheme.rightAlt);
-  const boost = keys.has(scheme.boost);
+  const wantsBoost = keys.has(scheme.boost) || keys.has(scheme.boostAlt);
+  const canPursuitBoost = car.role === "cop";
+  const boost = canPursuitBoost && wantsBoost && car.nitro > 0;
   const levelBoost = Math.max(0, car.vehicleLevel - 1);
   const isHeavyRig = car.isTank || car.isDozer;
   const accel = isHeavyRig ? (forward ? 68 : back ? -42 : 0) : car.isBus ? (forward ? 76 : back ? -48 : 0) : forward ? 86 + levelBoost * 14 : back ? -56 : 0;
   const baseMax = car.isTank ? 58 : car.isDozer ? 62 : car.isBus ? 68 : 72 + levelBoost * 12;
-  const boostedMax = car.isTank ? 82 : car.isDozer ? 88 : car.isBus ? 98 : 108 + levelBoost * 12;
+  const boostedMax = car.isTank ? 96 : car.isInterceptor ? 136 + levelBoost * 14 : 122 + levelBoost * 14;
   const maxSpeed = boost && car.nitro > 0 ? boostedMax : baseMax;
-  car.speed += accel * dt;
+  car.speed += accel * (boost && forward ? 1.55 : 1) * dt;
   car.speed *= Math.pow(0.88, dt * 5);
   car.speed = THREE.MathUtils.clamp(car.speed, isHeavyRig ? -24 : car.isBus ? -28 : -34, maxSpeed);
-  if (boost && Math.abs(car.speed) > 18 && car.nitro > 0) {
-    car.nitro = Math.max(0, car.nitro - dt * 0.34);
-    addSpark(car.group.position, selectedRole === "cop" ? 0x36e7d4 : 0xff3c38);
+  if (boost && Math.abs(car.speed) > 18) {
+    car.nitro = Math.max(0, car.nitro - dt * 0.4);
+    addSpark(car.group.position, 0x36e7d4);
   } else {
-    car.nitro = Math.min(1, car.nitro + dt * 0.12);
+    car.nitro = Math.min(1, car.nitro + dt * (canPursuitBoost ? 0.16 : 0.1));
   }
   const turn = (left ? 1 : 0) - (right ? 1 : 0);
   car.angle += turn * dt * (car.isTank ? 1.25 : car.isDozer ? 1.38 : car.isBus ? 1.65 : car.isInterceptor ? 2.25 : 2.55) * THREE.MathUtils.clamp(Math.abs(car.speed) / 30, 0.2, 1);
@@ -2352,6 +2354,7 @@ function updateUi() {
   const sec = Math.floor(remaining % 60).toString().padStart(2, "0");
   ui.time.textContent = `${min}:${sec}`;
   ui.nitro.style.width = `${Math.floor(player.nitro * 100)}%`;
+  ui.nitro.parentElement.classList.toggle("active", player.role === "cop");
   updateCriminalPointer();
 }
 
@@ -2428,7 +2431,8 @@ function animate() {
       leftAlt: "ArrowLeft",
       right: "KeyD",
       rightAlt: "ArrowRight",
-      boost: "ShiftLeft"
+      boost: "ShiftLeft",
+      boostAlt: "ShiftRight"
     });
     if (player2) {
       updatePlayer(player2, dt, {
@@ -2440,7 +2444,8 @@ function animate() {
         leftAlt: "Numpad4",
         right: "KeyL",
         rightAlt: "Numpad6",
-        boost: "Space"
+        boost: "Space",
+        boostAlt: "Space"
       });
     }
     for (const car of vehicles) {
