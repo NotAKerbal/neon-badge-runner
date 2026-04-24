@@ -312,6 +312,67 @@ button:hover {
   font-weight: 900;
 }
 
+.collapse-tips {
+  position: fixed;
+  inset: 0;
+  z-index: 7;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.collapse-tip {
+  position: absolute;
+  left: 0;
+  top: 0;
+  min-width: 178px;
+  max-width: min(280px, calc(100vw - 32px));
+  padding: 9px 12px 10px;
+  border: 2px solid var(--paper);
+  border-left: 8px solid var(--signal);
+  border-radius: 6px;
+  color: var(--ink);
+  background:
+    repeating-linear-gradient(-45deg, rgba(16, 16, 20, 0.1), rgba(16, 16, 20, 0.1) 4px, transparent 4px, transparent 9px),
+    var(--gold);
+  box-shadow: 5px 5px 0 rgba(0, 0, 0, 0.5);
+  text-transform: uppercase;
+  will-change: opacity, transform;
+}
+
+.collapse-tip::after {
+  content: "";
+  position: absolute;
+  left: 18px;
+  bottom: -10px;
+  width: 16px;
+  height: 16px;
+  border-right: 2px solid var(--paper);
+  border-bottom: 2px solid var(--paper);
+  background: var(--gold);
+  transform: rotate(45deg);
+}
+
+.collapse-tip strong,
+.collapse-tip span {
+  position: relative;
+  z-index: 1;
+  display: block;
+}
+
+.collapse-tip strong {
+  font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+  letter-spacing: 0;
+  font-size: 22px;
+  line-height: 0.95;
+}
+
+.collapse-tip span {
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.25;
+  font-weight: 900;
+}
+
 .radio {
   position: fixed;
   left: 16px;

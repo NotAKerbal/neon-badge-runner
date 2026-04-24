@@ -29,6 +29,7 @@ const ui = {
   heat: document.querySelector("#heatLabel"),
   time: document.querySelector("#timeLabel"),
   pointer: document.querySelector("#criminalPointer"),
+  collapseTips: document.querySelector("#collapseTips"),
   radio: document.querySelector("#radioText"),
   nitro: document.querySelector("#nitroBar"),
   roleCards: [...document.querySelectorAll(".role-card")],
@@ -52,6 +53,7 @@ const ramps = [];
 const pedestrians = [];
 const vehicles = [];
 const sparks = [];
+const collapseTooltips = [];
 const trafficMats = [];
 let towLine;
 let towedVehicle = null;
@@ -210,6 +212,11 @@ function vehicleMass(car) {
   if (car.trafficVariant === "scooter") return 0.42;
   if (car.role === "traffic") return 1.15;
   return 1.65;
+}
+
+function steerAngleToward(current, target, maxTurn) {
+  const delta = THREE.MathUtils.euclideanModulo(target - current + Math.PI, Math.PI * 2) - Math.PI;
+  return current + THREE.MathUtils.clamp(delta, -maxTurn, maxTurn);
 }
 
 function makeCar(role, controlled = false, tint = null) {
@@ -697,6 +704,7 @@ function generateCity() {
         building.userData.maxHealth = Math.max(90, h * 4);
         building.userData.health = building.userData.maxHealth;
         building.userData.destructible = true;
+        building.userData.collapseKind = h > 40 ? "skyscraper" : "building";
         buildings.push(building);
         obstacles.push(building);
         world.add(base, building);
@@ -864,6 +872,7 @@ function makePark(x, z, block) {
     tree.userData.maxHealth = 35;
     tree.userData.health = 35;
     tree.userData.destructible = true;
+    tree.userData.collapseKind = "tree";
     obstacles.push(tree);
     park.add(tree);
   }
@@ -893,6 +902,7 @@ function addPlayground(park, block) {
   playground.userData.maxHealth = 70;
   playground.userData.health = 70;
   playground.userData.destructible = true;
+  playground.userData.collapseKind = "playground";
   obstacles.push(playground);
   park.add(playground);
 }
@@ -912,6 +922,7 @@ function makeNeighborhoodLot(x, z, block) {
   house.userData.maxHealth = 95;
   house.userData.health = 95;
   house.userData.destructible = true;
+  house.userData.collapseKind = "house";
   obstacles.push(house);
   buildings.push(house);
   lot.add(house);
@@ -984,6 +995,7 @@ function makeDesertPatch(x, z, block) {
     cactus.userData.maxHealth = 45;
     cactus.userData.health = 45;
     cactus.userData.destructible = true;
+    cactus.userData.collapseKind = "cactus";
     obstacles.push(cactus);
     desert.add(cactus);
   }
@@ -1019,6 +1031,7 @@ function addWildWestSet(desert, block) {
   set.userData.maxHealth = 115;
   set.userData.health = 115;
   set.userData.destructible = true;
+  set.userData.collapseKind = "saloon";
   obstacles.push(set);
   desert.add(set);
 }
@@ -1319,7 +1332,7 @@ function moveCar(car, dt) {
     car.group.position.x = THREE.MathUtils.clamp(car.group.position.x, -boundary, boundary);
     car.group.position.z = THREE.MathUtils.clamp(car.group.position.z, -boundary, boundary);
     car.speed *= -0.34;
-    car.angle += Math.PI + rng.range(-0.45, 0.45);
+    car.angle += rng.range(-0.2, 0.2);
     car.target = null;
     car.cooldown = Math.max(car.cooldown, 0.45);
     car.verticalSpeed = Math.max(car.verticalSpeed, Math.abs(car.speed) * 0.04);
@@ -1348,13 +1361,16 @@ function moveCar(car, dt) {
     if (dist < radius + car.radius) {
       const impact = Math.abs(car.speed);
       const hitPoint = car.group.position.clone();
-      car.group.position.copy(previous);
-      car.speed *= -0.42;
-      car.angle += rng.range(-0.55, 0.55);
+      const normal = new THREE.Vector3(dx || rng.range(-1, 1), 0, dz || rng.range(-1, 1)).normalize();
+      const overlap = radius + car.radius - Math.max(dist, 0.001);
+      car.group.position.addScaledVector(normal, Math.min(overlap * 0.55, 4.5));
+      car.speed *= -0.62;
+      car.angle = steerAngleToward(car.angle, Math.atan2(normal.x, normal.z), 0.62);
+      car.verticalSpeed = Math.max(car.verticalSpeed, Math.min(12, impact * 0.09));
       damageCar(car, impact * 0.22, null);
-      damageObstacle(obstacle, impact * (car.isTank ? 2.45 : car.isDozer ? 2.7 : car.isBus ? 1.9 : 1.15), hitPoint);
+      damageObstacle(obstacle, impact * (car.isTank ? 2.45 : car.isDozer ? 2.7 : car.isBus ? 1.9 : 1.15), hitPoint, car);
       if (car.controlled) shake(0.35);
-      addSpark(previous, 0xf9c74f);
+      addSpark(hitPoint, 0xf9c74f);
       break;
     }
   }
@@ -1586,9 +1602,9 @@ function updateTowCable(dt) {
   if (dist > cableLength) {
     delta.normalize();
     const pull = dist - cableLength;
-    towedVehicle.group.position.addScaledVector(delta, -pull * 0.65);
-    towedVehicle.speed = Math.max(towedVehicle.speed, Math.min(Math.abs(player.speed) * (player.isTank || player.isDozer ? 0.95 : 0.72), player.isTank || player.isDozer ? 82 : player.isBus ? 70 : 58));
-    towedVehicle.angle = Math.atan2(delta.x, delta.z) + Math.PI + Math.sin(performance.now() * 0.008) * 0.55;
+    towedVehicle.group.position.addScaledVector(delta, -Math.min(pull * 0.28, 5.5));
+    towedVehicle.speed = Math.max(towedVehicle.speed, Math.min(Math.abs(player.speed) * (player.isTank || player.isDozer ? 1.08 : 0.84), player.isTank || player.isDozer ? 92 : player.isBus ? 78 : 66));
+    towedVehicle.angle = steerAngleToward(towedVehicle.angle, Math.atan2(delta.x, delta.z) + Math.PI + Math.sin(performance.now() * 0.008) * 0.35, 0.42);
   }
   towedVehicle.verticalSpeed = Math.max(towedVehicle.verticalSpeed, 0);
   towedVehicle.cooldown = Math.max(towedVehicle.cooldown, 0.12);
@@ -1630,19 +1646,20 @@ function bounceVehicles(a, b, dealDamage = true) {
   const victimDir = new THREE.Vector3(Math.sin(victim.angle), 0, Math.cos(victim.angle)).multiplyScalar(Math.sign(victimSpeed || 1));
   const closingSpeed = Math.max(0, hitterDir.clone().multiplyScalar(Math.abs(hitterSpeed)).sub(victimDir.multiplyScalar(Math.abs(victimSpeed))).length());
   const massRatio = hitterMass / Math.max(victimMass, 0.1);
-  const shove = THREE.MathUtils.clamp(closingSpeed * 0.14 * massRatio, 2.5, 14);
+  const shove = THREE.MathUtils.clamp(closingSpeed * 0.08 * massRatio, 1.4, 7.5);
   const launchChance = THREE.MathUtils.clamp((closingSpeed - 32) / 78 + (massRatio - 1) * 0.09, 0.04, 0.78);
   const launchPower = THREE.MathUtils.clamp((closingSpeed - 18) * 0.22 * Math.min(massRatio, 3.4), 0, 28);
 
-  const aSeparation = 1.4 + shove * (bMass / (aMass + bMass));
-  const bSeparation = 1.4 + shove * (aMass / (aMass + bMass));
+  const overlap = Math.max(0, a.radius + b.radius - a.group.position.distanceTo(b.group.position));
+  const aSeparation = Math.min(4.5, 0.55 + overlap * 0.38 * (bMass / (aMass + bMass)) + shove * 0.16);
+  const bSeparation = Math.min(4.5, 0.55 + overlap * 0.38 * (aMass / (aMass + bMass)) + shove * 0.16);
   a.group.position.addScaledVector(normal, aSeparation);
   b.group.position.addScaledVector(normal, -bSeparation);
 
-  victim.group.position.addScaledVector(hitterDir, shove * THREE.MathUtils.clamp(massRatio, 0.8, 3.2));
-  victim.angle = Math.atan2(hitterDir.x, hitterDir.z) + rng.range(-0.22, 0.22);
-  victim.speed = THREE.MathUtils.clamp(Math.abs(hitterSpeed) * THREE.MathUtils.clamp(0.5 + massRatio * 0.2, 0.45, 1.35), 8, victim.role === "traffic" ? 95 : 110);
-  hitter.speed = hitterSpeed * THREE.MathUtils.clamp(1 - 0.12 / Math.max(massRatio, 0.6), 0.72, 0.96);
+  victim.group.position.addScaledVector(hitterDir, shove * THREE.MathUtils.clamp(massRatio, 0.55, 1.35));
+  victim.angle = steerAngleToward(victim.angle, Math.atan2(hitterDir.x, hitterDir.z) + rng.range(-0.12, 0.12), 0.58);
+  victim.speed = THREE.MathUtils.clamp(Math.abs(hitterSpeed) * THREE.MathUtils.clamp(0.58 + massRatio * 0.24, 0.5, 1.45), 10, victim.role === "traffic" ? 105 : 120);
+  hitter.speed = hitterSpeed * THREE.MathUtils.clamp(1 - 0.18 / Math.max(massRatio, 0.6), 0.62, 0.94);
 
   const loserLaunch = rng.next() < launchChance;
   const winnerLaunch = rng.next() < launchChance * 0.23 && massRatio < 1.4;
@@ -1656,10 +1673,10 @@ function bounceVehicles(a, b, dealDamage = true) {
       hitter.group.position.y = Math.max(hitter.group.position.y, 0.25);
     }
   }
-  a.angle += rng.range(-0.22, 0.22);
-  b.angle += rng.range(-0.22, 0.22);
-  a.cooldown = Math.max(a.cooldown, 0.45);
-  b.cooldown = Math.max(b.cooldown, 0.45);
+  a.angle += rng.range(-0.16, 0.16);
+  b.angle += rng.range(-0.16, 0.16);
+  a.cooldown = Math.max(a.cooldown, 0.26);
+  b.cooldown = Math.max(b.cooldown, 0.26);
   const hitPoint = a.group.position.clone().add(b.group.position).multiplyScalar(0.5);
   const hitPower = Math.max(8, closingSpeed * 0.38 + (aMomentum + bMomentum) * 0.035);
   if (dealDamage) {
@@ -1701,15 +1718,15 @@ function damageCar(car, amount, source = null) {
   }
 }
 
-function damageObstacle(obstacle, amount, impactPoint) {
+function damageObstacle(obstacle, amount, impactPoint, sourceCar = null) {
   if (!obstacle.userData?.destructible) return;
   obstacle.userData.health -= amount;
   obstacle.rotation.y += rng.range(-0.02, 0.02);
   if (obstacle.userData.health > 0) return;
-  destroyObstacle(obstacle, impactPoint);
+  destroyObstacle(obstacle, impactPoint, sourceCar);
 }
 
-function destroyObstacle(obstacle, impactPoint = obstacle.position) {
+function destroyObstacle(obstacle, impactPoint = obstacle.position, sourceCar = null) {
   const obstacleIndex = obstacles.indexOf(obstacle);
   if (obstacleIndex >= 0) obstacles.splice(obstacleIndex, 1);
   const buildingIndex = buildings.indexOf(obstacle);
@@ -1717,6 +1734,7 @@ function destroyObstacle(obstacle, impactPoint = obstacle.position) {
 
   const worldPos = new THREE.Vector3();
   obstacle.getWorldPosition(worldPos);
+  const collapse = getCollapseReport(obstacle, sourceCar);
   const parent = obstacle.parent;
   if (parent) parent.remove(obstacle);
   else world.remove(obstacle);
@@ -1733,7 +1751,88 @@ function destroyObstacle(obstacle, impactPoint = obstacle.position) {
   for (let i = 0; i < 20; i++) addSpark(impactPoint, 0xf9c74f);
   addScore(35);
   heat = Math.min(99, heat + 3);
-  announce("Building collapsed. The city planner is inconsolable.");
+  spawnCollapseTooltip(worldPos, collapse);
+  announce(collapse.news);
+}
+
+function getCollapseReport(obstacle, sourceCar = null) {
+  const kind = obstacle.userData?.collapseKind || "building";
+  const heavyRig = sourceCar?.isTank || sourceCar?.isDozer || sourceCar?.isBus;
+  const fastHit = Math.abs(sourceCar?.speed || 0) > 34;
+  const kindReports = {
+    skyscraper: [
+      ["PANCAKE STACK", "Floor 12 has politely joined floor 3.", "City Hall just invented vertical parking."],
+      ["WINDOW CONFETTI", "Every office got a sudden open floor plan.", "Glass forecast: spicy with a chance of paperwork."],
+      ["ELEVATOR EXPRESS", "The lobby arrived at the roof. Somehow.", "Downtown permits department has left the chat."]
+    ],
+    building: [
+      ["BRICK BURP", "The facade sneezed itself into rubble.", "Local building attempts slapstick. Scores high."],
+      ["SIDEWAYS SPECIAL", "That wall chose horizontal living.", "Structural integrity filed a noise complaint."],
+      ["INSTANT RENOVATION", "Now featuring one enormous drive-thru.", "Architects describe it as extremely open concept."]
+    ],
+    house: [
+      ["PORCH PANIC", "The mailbox survived. The house did not.", "Neighborhood watch is watching somewhere else."],
+      ["ROOF FLOP", "The roof came down like a cheap hat.", "Suburban zoning meets high-speed nonsense."],
+      ["GARAGE SALE", "Everything must go, including the walls.", "Local lawn now has indoor square footage."]
+    ],
+    saloon: [
+      ["SALOON SPLINTER", "The swinging doors are now just swinging.", "Old West set loses duel with modern traffic."],
+      ["TUMBLEWEED TAKEOVER", "The porch left town at high noon.", "Sheriff reports the saloon folded first."],
+      ["WILD WEST FLATPACK", "Some assembly no longer required.", "The frontier has been converted to kindling."]
+    ],
+    playground: [
+      ["SLIDE CANCELLED", "The slide is now more of a suggestion.", "Recess physics just got peer reviewed."],
+      ["SWING SET YEET", "Two seats entered orbit. Briefly.", "Park department rates impact: too exciting."],
+      ["MULCH MONSOON", "The playground became a parts catalog.", "Tiny traffic cones have been requested."]
+    ],
+    tree: [
+      ["TIMBER TANTRUM", "Tree down. Shade privileges revoked.", "Urban forestry is writing a stern leaf."],
+      ["BRANCH MANEUVER", "That tree committed to the bit.", "Park maintenance heard the crunch from space."],
+      ["STUMP SPEEDRUN", "From tree to stump in record time.", "Nature has requested a slower lane."]
+    ],
+    cactus: [
+      ["CACTUS POP", "Desert balloon, but worse for tires.", "Spines scattered. Please drive with feelings."],
+      ["PRICKLY PANCAKE", "That cactus got flattened with attitude.", "Western medicine calls this extremely avoidable."],
+      ["NEEDLE BLIZZARD", "The desert briefly became a porcupine cloud.", "Cacti union demands hazard pay."]
+    ]
+  };
+  const heavyReports = [
+    ["HEAVY METAL", "Mass won the argument in one syllable.", "Officials blame excessive vehicle confidence."],
+    ["BULLDOZER LOGIC", "Obstacle deleted by blunt philosophy.", "Engineers confirm: bigger did bigger things."]
+  ];
+  const speedReports = [
+    ["KINETIC WHOOPS", "Speed converted directly into architecture dust.", "Radar clocked the building at zero regrets."],
+    ["VELOCITY VERDICT", "Fast car, slow wall, predictable drama.", "Insurance adjusters are stretching first."]
+  ];
+  const pool = heavyRig ? heavyReports.concat(kindReports[kind] || kindReports.building) : fastHit ? speedReports.concat(kindReports[kind] || kindReports.building) : kindReports[kind] || kindReports.building;
+  const [title, detail, news] = rng.pick(pool);
+  return { title, detail, news };
+}
+
+function spawnCollapseTooltip(worldPos, report) {
+  if (!ui.collapseTips) return;
+  const tip = document.createElement("div");
+  const title = document.createElement("strong");
+  const detail = document.createElement("span");
+  tip.className = "collapse-tip";
+  title.textContent = report.title;
+  detail.textContent = report.detail;
+  tip.append(title, detail);
+  ui.collapseTips.append(tip);
+  collapseTooltips.push({
+    el: tip,
+    pos: worldPos.clone().add(new THREE.Vector3(rng.range(-2, 2), 12, rng.range(-2, 2))),
+    life: 2.75,
+    maxLife: 2.75,
+    drift: new THREE.Vector3(rng.range(-1.2, 1.2), rng.range(3.5, 5.5), rng.range(-1.2, 1.2))
+  });
+  while (collapseTooltips.length > 5) removeCollapseTooltip(collapseTooltips[0]);
+}
+
+function removeCollapseTooltip(tip) {
+  const index = collapseTooltips.indexOf(tip);
+  if (index >= 0) collapseTooltips.splice(index, 1);
+  tip.el.remove();
 }
 
 function captureCar(captor, target) {
@@ -1905,6 +2004,20 @@ function announce(text) {
   radioTimer = 3.8;
 }
 
+function updateCollapseTooltips(dt) {
+  for (const tip of [...collapseTooltips]) {
+    tip.life -= dt;
+    tip.pos.addScaledVector(tip.drift, dt);
+    const projected = tip.pos.clone().project(camera);
+    const visible = projected.z > -1 && projected.z < 1;
+    const age = 1 - tip.life / tip.maxLife;
+    const fade = Math.min(1, tip.life / 0.45, age / 0.14);
+    tip.el.style.opacity = visible ? String(Math.max(0, fade)) : "0";
+    tip.el.style.transform = `translate(${(projected.x * 0.5 + 0.5) * window.innerWidth}px, ${(-projected.y * 0.5 + 0.5) * window.innerHeight}px) translate(-50%, -120%) scale(${1 + age * 0.08})`;
+    if (tip.life <= 0) removeCollapseTooltip(tip);
+  }
+}
+
 function updateUi() {
   const vehicleName = selectedRole === "cop" ? (player.vehicleLevel >= 4 ? "Tank" : player.vehicleLevel >= 3 ? "SWAT" : player.vehicleLevel >= 2 ? "Interceptor" : "Cop") : (player.vehicleLevel >= 4 ? "Dozer" : player.vehicleLevel >= 3 ? "Bus" : player.vehicleLevel >= 2 ? "Muscle" : "Criminal");
   ui.roleLabel.textContent = `${vehicleName} L${player.vehicleLevel}`;
@@ -2024,6 +2137,7 @@ function animate() {
       if (radioTimer <= 0) ui.radio.textContent = selectedRole === "cop" ? "Donuts heal. Total score unlocks Interceptor, SWAT, and Tank tiers." : "Total score unlocks Muscle, Bus, and Bulldozer tiers.";
     }
   }
+  updateCollapseTooltips(dt);
   renderer.render(scene, camera);
 }
 
