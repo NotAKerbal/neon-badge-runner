@@ -287,6 +287,10 @@ function steerAngleToward(current, target, maxTurn) {
   return current + THREE.MathUtils.clamp(delta, -maxTurn, maxTurn);
 }
 
+function isPlayerActor(actor) {
+  return actor === player || actor === player2;
+}
+
 function collisionKey(x, z) {
   return `${Math.floor(x / collisionGridSize)},${Math.floor(z / collisionGridSize)}`;
 }
@@ -1700,10 +1704,6 @@ function maybeUpgradeNpcVehicle(car) {
     else rebuildAsCriminalMuscle(car);
   }
 
-  if (car.group.position.distanceTo(player.group.position) < 130) {
-    const label = car.role === "cop" ? (desiredLevel >= 4 ? "CPU tank" : desiredLevel >= 3 ? "CPU SWAT van" : "CPU interceptor") : (desiredLevel >= 4 ? "CPU bulldozer" : desiredLevel >= 3 ? "CPU bus" : "CPU muscle car");
-    announce(`${label} upgraded nearby. The streets are escalating.`);
-  }
 }
 
 function toggleTowCable() {
@@ -1903,10 +1903,12 @@ function destroyObstacle(obstacle, impactPoint = obstacle.position, sourceCar = 
     world.add(rubble);
   }
   for (let i = 0; i < 20; i++) addSpark(impactPoint, 0xf9c74f);
-  addScore(35);
-  heat = Math.min(99, heat + 3);
-  spawnCollapseTooltip(worldPos, collapse);
-  announce(collapse.news);
+  if (isPlayerActor(sourceCar)) {
+    addScore(35);
+    heat = Math.min(99, heat + 3);
+    spawnCollapseTooltip(worldPos, collapse);
+    announce(collapse.news);
+  }
 }
 
 function getCollapseReport(obstacle, sourceCar = null) {
