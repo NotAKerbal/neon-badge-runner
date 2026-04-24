@@ -68,13 +68,14 @@ let score = 0;
 let lifeScore = 0;
 let totalScore = Number(localStorage.getItem("neon-badge-runner-total") || 0);
 let heat = 0;
+let heatCopTier = 0;
 let remaining = 180;
 let radioTimer = 0;
 let roadMap = [];
 let roadCells = [];
 let mapLimit = 245;
 const blockSize = 28;
-const worldCells = 25;
+const worldCells = 31;
 const unlocks = {
   copInterceptor: 350,
   copSwat: 900,
@@ -92,10 +93,20 @@ const mats = {
   lane: new THREE.MeshBasicMaterial({ color: 0xf5e7b8 }),
   crosswalk: new THREE.MeshBasicMaterial({ color: 0xf3eee1 }),
   grass: new THREE.MeshStandardMaterial({ color: 0x1f7a5a, roughness: 0.9 }),
+  lawn: new THREE.MeshStandardMaterial({ color: 0x3f9b55, roughness: 0.92 }),
+  sand: new THREE.MeshStandardMaterial({ color: 0xc79b5f, roughness: 0.96 }),
+  cactus: new THREE.MeshStandardMaterial({ color: 0x2c8a4a, roughness: 0.82 }),
+  desertRock: new THREE.MeshStandardMaterial({ color: 0x8c7257, roughness: 0.9 }),
   sidewalk: new THREE.MeshStandardMaterial({ color: 0x7b7b72, roughness: 0.8 }),
   park: new THREE.MeshStandardMaterial({ color: 0x2e9b63, roughness: 0.94 }),
   tree: new THREE.MeshStandardMaterial({ color: 0x1c6a3a, roughness: 0.86 }),
   trunk: new THREE.MeshStandardMaterial({ color: 0x6d5135, roughness: 0.9 }),
+  houseRoof: new THREE.MeshStandardMaterial({ color: 0x7d2f32, roughness: 0.78 }),
+  houseWall: new THREE.MeshStandardMaterial({ color: 0xd7c6a5, roughness: 0.74 }),
+  fence: new THREE.MeshStandardMaterial({ color: 0xd8cfb2, roughness: 0.84 }),
+  playground: new THREE.MeshStandardMaterial({ color: 0xff5a5f, roughness: 0.55 }),
+  playgroundBlue: new THREE.MeshStandardMaterial({ color: 0x3fa7d6, roughness: 0.5 }),
+  wood: new THREE.MeshStandardMaterial({ color: 0x9b6a3f, roughness: 0.82 }),
   water: new THREE.MeshStandardMaterial({ color: 0x2489a6, emissive: 0x052936, roughness: 0.28, metalness: 0.15 }),
   rubble: new THREE.MeshStandardMaterial({ color: 0x6f6b5f, roughness: 0.88 }),
   glass: new THREE.MeshStandardMaterial({ color: 0x36e7d4, emissive: 0x0a5b59, roughness: 0.28, metalness: 0.1 }),
@@ -115,6 +126,7 @@ const mats = {
   white: new THREE.MeshStandardMaterial({ color: 0xf5e7b8, emissive: 0x15110a }),
   gold: new THREE.MeshStandardMaterial({ color: 0xf9c74f, emissive: 0x4a3200, roughness: 0.34 }),
   loot: new THREE.MeshStandardMaterial({ color: 0xf9c74f, emissive: 0x5c3300, roughness: 0.2 }),
+  cash: new THREE.MeshStandardMaterial({ color: 0x74d66d, emissive: 0x123d17, roughness: 0.42 }),
   donut: new THREE.MeshStandardMaterial({ color: 0xffb4cf, emissive: 0x5d1430, roughness: 0.35 })
 };
 
@@ -206,11 +218,11 @@ function makeCar(role, controlled = false, tint = null) {
   const material = tint || (role === "cop" ? mats.cop : role === "criminal" ? mats.criminal : rng.pick(trafficMats));
 
   if (trafficVariant === "pickup") {
-    const cab = makeBox(5.4, 1.65, 4.3, material, 0, 1.25, -2.15);
-    const bed = makeBox(5.7, 1.0, 5.2, material, 0, 1.05, 2.65);
-    const bedGap = makeBox(4.6, 0.74, 3.9, mats.tire, 0, 1.45, 2.75);
-    const glass = makeBox(3.7, 1.25, 2.2, mats.glass, 0, 2.45, -2.2);
-    const bumper = makeBox(6.1, 0.45, 0.72, mats.white, 0, 1.05, -4.55);
+    const cab = makeBox(5.4, 1.65, 4.3, material, 0, 1.25, 2.15);
+    const bed = makeBox(5.7, 1.0, 5.2, material, 0, 1.05, -2.65);
+    const bedGap = makeBox(4.6, 0.74, 3.9, mats.tire, 0, 1.45, -2.75);
+    const glass = makeBox(3.7, 1.25, 2.2, mats.glass, 0, 2.45, 2.2);
+    const bumper = makeBox(6.1, 0.45, 0.72, mats.white, 0, 1.05, 4.55);
     group.add(cab, bed, bedGap, glass, bumper);
     for (const x of [-3.1, 3.1]) {
       for (const z of [-3.35, 3.45]) {
@@ -223,14 +235,14 @@ function makeCar(role, controlled = false, tint = null) {
     }
   } else if (trafficVariant === "scooter") {
     const deck = makeBox(1.2, 0.42, 3.8, material, 0, 0.92, 0.15);
-    const seat = makeBox(1.35, 0.45, 1.25, mats.tire, 0, 1.42, 0.65);
+    const seat = makeBox(1.35, 0.45, 1.25, mats.tire, 0, 1.42, -0.65);
     const rider = new THREE.Mesh(new THREE.CapsuleGeometry(0.34, 0.95, 4, 8), mats.pedestrianBright);
-    rider.position.set(0, 2.05, 0.1);
+    rider.position.set(0, 2.05, -0.1);
     rider.castShadow = true;
     const head = new THREE.Mesh(new THREE.SphereGeometry(0.34, 10, 10), mats.pedestrianSkin);
-    head.position.set(0, 2.78, 0.08);
+    head.position.set(0, 2.78, -0.08);
     head.castShadow = true;
-    const handlebar = makeBox(1.7, 0.16, 0.24, mats.white, 0, 1.78, -1.72);
+    const handlebar = makeBox(1.7, 0.16, 0.24, mats.white, 0, 1.78, 1.72);
     group.add(deck, seat, rider, head, handlebar);
     for (const z of [-1.55, 1.75]) {
       const tire = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.52, 0.32, 14), mats.tire);
@@ -241,8 +253,8 @@ function makeCar(role, controlled = false, tint = null) {
     }
   } else {
     const body = makeBox(5.2, 1.4, 8.3, material, 0, 1.1, 0);
-    const cabin = makeBox(3.6, 1.4, 3.3, mats.glass, 0, 2.25, -0.6);
-    const bumper = makeBox(5.6, 0.45, 0.6, mats.white, 0, 1.15, -4.55);
+    const cabin = makeBox(3.6, 1.4, 3.3, mats.glass, 0, 2.25, 0.6);
+    const bumper = makeBox(5.6, 0.45, 0.6, mats.white, 0, 1.15, 4.55);
     group.add(body, cabin, bumper);
 
     for (const x of [-2.9, 2.9]) {
@@ -256,15 +268,15 @@ function makeCar(role, controlled = false, tint = null) {
     }
 
     if (role === "cop") {
-      const bar = makeBox(3.2, 0.32, 0.7, mats.white, 0, 3.15, -0.7);
-      const red = makeBox(1.4, 0.38, 0.8, mats.criminal, -0.8, 3.4, -0.7);
-      const blue = makeBox(1.4, 0.38, 0.8, mats.cop, 0.8, 3.4, -0.7);
+      const bar = makeBox(3.2, 0.32, 0.7, mats.white, 0, 3.15, 0.7);
+      const red = makeBox(1.4, 0.38, 0.8, mats.criminal, -0.8, 3.4, 0.7);
+      const blue = makeBox(1.4, 0.38, 0.8, mats.cop, 0.8, 3.4, 0.7);
       group.add(bar, red, blue);
     } else if (role === "criminal") {
-      const spoiler = makeBox(5, 0.28, 0.55, mats.tire, 0, 2.1, 4.35);
+      const spoiler = makeBox(5, 0.28, 0.55, mats.tire, 0, 2.1, -4.35);
       group.add(spoiler);
     } else {
-      const roof = makeBox(3.1, 0.42, 2.4, mats.white, 0, 3.02, -0.3);
+      const roof = makeBox(3.1, 0.42, 2.4, mats.white, 0, 3.02, 0.3);
       group.add(roof);
     }
   }
@@ -315,9 +327,9 @@ function rebuildAsBus(car) {
   }
 
   const lower = makeBox(7.6, 2.2, 15.5, mats.criminal, 0, 1.35, 0);
-  const upper = makeBox(7.1, 2.0, 13.8, mats.criminal, 0, 3.55, -0.35);
-  const windshield = makeBox(6.2, 1.25, 0.5, mats.glass, 0, 2.45, -8.02);
-  const sideStripe = makeBox(7.85, 0.48, 13.5, mats.gold, 0, 2.35, 0.5);
+  const upper = makeBox(7.1, 2.0, 13.8, mats.criminal, 0, 3.55, 0.35);
+  const windshield = makeBox(6.2, 1.25, 0.5, mats.glass, 0, 2.45, 8.02);
+  const sideStripe = makeBox(7.85, 0.48, 13.5, mats.gold, 0, 2.35, -0.5);
   car.group.add(lower, upper, windshield, sideStripe);
 
   for (const x of [-4.1, 4.1]) {
@@ -350,11 +362,11 @@ function rebuildAsBulldozer(car) {
     car.group.remove(child);
   }
 
-  const body = makeBox(7.8, 2.2, 11.4, mats.gold, 0, 1.55, 0.6);
-  const cabin = makeBox(4.9, 2.1, 4.6, mats.glass, 0, 3.38, 1.35);
-  const hood = makeBox(6.7, 1.3, 4.8, mats.gold, 0, 2.1, -3.4);
-  const blade = makeBox(10.8, 2.1, 0.82, mats.rubble, 0, 1.18, -6.9);
-  const bladeLip = makeBox(11.5, 0.38, 0.55, mats.white, 0, 2.28, -7.1);
+  const body = makeBox(7.8, 2.2, 11.4, mats.gold, 0, 1.55, -0.6);
+  const cabin = makeBox(4.9, 2.1, 4.6, mats.glass, 0, 3.38, -1.35);
+  const hood = makeBox(6.7, 1.3, 4.8, mats.gold, 0, 2.1, 3.4);
+  const blade = makeBox(10.8, 2.1, 0.82, mats.rubble, 0, 1.18, 6.9);
+  const bladeLip = makeBox(11.5, 0.38, 0.55, mats.white, 0, 2.28, 7.1);
   car.group.add(body, cabin, hood, blade, bladeLip);
 
   for (const x of [-4.4, 4.4]) {
@@ -434,12 +446,12 @@ function rebuildAsCopUpgrade(car, level) {
 
   if (level >= 3) {
     const body = makeBox(7.2, 2.1, 11.8, mats.cop, 0, 1.35, 0);
-    const cabin = makeBox(5.6, 1.6, 5.2, mats.glass, 0, 3.05, -0.8);
-    const ram = makeBox(8.2, 0.8, 1.2, mats.tire, 0, 1.05, -6.55);
-    const stripe = makeBox(7.5, 0.42, 10.4, mats.white, 0, 2.35, 0.2);
-    const bar = makeBox(4.4, 0.38, 0.85, mats.white, 0, 4.05, -0.9);
-    const red = makeBox(1.8, 0.45, 0.95, mats.criminal, -1.1, 4.36, -0.9);
-    const blue = makeBox(1.8, 0.45, 0.95, mats.cop, 1.1, 4.36, -0.9);
+    const cabin = makeBox(5.6, 1.6, 5.2, mats.glass, 0, 3.05, 0.8);
+    const ram = makeBox(8.2, 0.8, 1.2, mats.tire, 0, 1.05, 6.55);
+    const stripe = makeBox(7.5, 0.42, 10.4, mats.white, 0, 2.35, -0.2);
+    const bar = makeBox(4.4, 0.38, 0.85, mats.white, 0, 4.05, 0.9);
+    const red = makeBox(1.8, 0.45, 0.95, mats.criminal, -1.1, 4.36, 0.9);
+    const blue = makeBox(1.8, 0.45, 0.95, mats.cop, 1.1, 4.36, 0.9);
     car.group.add(body, cabin, ram, stripe, bar, red, blue);
     for (const x of [-4, 4]) {
       for (const z of [-4.2, 4.2]) {
@@ -453,11 +465,11 @@ function rebuildAsCopUpgrade(car, level) {
     car.radius = 5.9;
   } else {
     const body = makeBox(6.4, 1.65, 9.6, mats.cop, 0, 1.18, 0);
-    const cabin = makeBox(4.5, 1.55, 4.1, mats.glass, 0, 2.65, -0.7);
-    const bumper = makeBox(6.9, 0.55, 0.85, mats.white, 0, 1.05, -5.15);
-    const bar = makeBox(3.8, 0.35, 0.8, mats.white, 0, 3.55, -0.7);
-    const red = makeBox(1.6, 0.42, 0.9, mats.criminal, -0.95, 3.85, -0.7);
-    const blue = makeBox(1.6, 0.42, 0.9, mats.cop, 0.95, 3.85, -0.7);
+    const cabin = makeBox(4.5, 1.55, 4.1, mats.glass, 0, 2.65, 0.7);
+    const bumper = makeBox(6.9, 0.55, 0.85, mats.white, 0, 1.05, 5.15);
+    const bar = makeBox(3.8, 0.35, 0.8, mats.white, 0, 3.55, 0.7);
+    const red = makeBox(1.6, 0.42, 0.9, mats.criminal, -0.95, 3.85, 0.7);
+    const blue = makeBox(1.6, 0.42, 0.9, mats.cop, 0.95, 3.85, 0.7);
     car.group.add(body, cabin, bumper, bar, red, blue);
     for (const x of [-3.5, 3.5]) {
       for (const z of [-3.4, 3.4]) {
@@ -489,9 +501,9 @@ function rebuildAsCriminalMuscle(car) {
     car.group.remove(child);
   }
   const body = makeBox(6.2, 1.35, 9.7, mats.criminal, 0, 1.1, 0);
-  const cabin = makeBox(3.9, 1.25, 3.4, mats.glass, 0, 2.25, -0.9);
-  const hood = makeBox(3.4, 0.4, 2.5, mats.tire, 0, 2.0, -3.05);
-  const spoiler = makeBox(6.4, 0.34, 0.7, mats.tire, 0, 2.05, 4.9);
+  const cabin = makeBox(3.9, 1.25, 3.4, mats.glass, 0, 2.25, 0.9);
+  const hood = makeBox(3.4, 0.4, 2.5, mats.tire, 0, 2.0, 3.05);
+  const spoiler = makeBox(6.4, 0.34, 0.7, mats.tire, 0, 2.05, -4.9);
   car.group.add(body, cabin, hood, spoiler);
   for (const x of [-3.3, 3.3]) {
     for (const z of [-3.25, 3.25]) {
@@ -538,8 +550,8 @@ function rebuildDefaultVehicle(car) {
 
   const material = car.role === "cop" ? mats.cop : car.role === "criminal" ? mats.criminal : mats.traffic;
   const body = makeBox(5.2, 1.4, 8.3, material, 0, 1.1, 0);
-  const cabin = makeBox(3.6, 1.4, 3.3, mats.glass, 0, 2.25, -0.6);
-  const bumper = makeBox(5.6, 0.45, 0.6, mats.white, 0, 1.15, -4.55);
+  const cabin = makeBox(3.6, 1.4, 3.3, mats.glass, 0, 2.25, 0.6);
+  const bumper = makeBox(5.6, 0.45, 0.6, mats.white, 0, 1.15, 4.55);
   car.group.add(body, cabin, bumper);
   for (const x of [-2.9, 2.9]) {
     for (const z of [-2.8, 2.8]) {
@@ -551,12 +563,12 @@ function rebuildDefaultVehicle(car) {
     }
   }
   if (car.role === "cop") {
-    const bar = makeBox(3.2, 0.32, 0.7, mats.white, 0, 3.15, -0.7);
-    const red = makeBox(1.4, 0.38, 0.8, mats.criminal, -0.8, 3.4, -0.7);
-    const blue = makeBox(1.4, 0.38, 0.8, mats.cop, 0.8, 3.4, -0.7);
+    const bar = makeBox(3.2, 0.32, 0.7, mats.white, 0, 3.15, 0.7);
+    const red = makeBox(1.4, 0.38, 0.8, mats.criminal, -0.8, 3.4, 0.7);
+    const blue = makeBox(1.4, 0.38, 0.8, mats.cop, 0.8, 3.4, 0.7);
     car.group.add(bar, red, blue);
   } else if (car.role === "criminal") {
-    const spoiler = makeBox(5, 0.28, 0.55, mats.tire, 0, 2.1, 4.35);
+    const spoiler = makeBox(5, 0.28, 0.55, mats.tire, 0, 2.1, -4.35);
     car.group.add(spoiler);
   }
 }
@@ -583,6 +595,20 @@ function isRoadCell(x, z) {
   return x % 3 === 0 || z % 3 === 0 || (x + z + seed) % 11 === 0;
 }
 
+function biomeForCell(gx, gz, half) {
+  const desertScore = gx / half + gz / half * 0.55;
+  const parkScore = -gx / half + -gz / half * 0.45;
+  if (desertScore > 1.08) return "desert";
+  if (parkScore > 1.14) return "park";
+  const ring = Math.hypot(gx, gz) / half;
+  const residentialBand = ring > 0.5 && ring < 0.78;
+  const pocketA = gx < -5 && gx > -11 && gz > -3 && gz < 5;
+  const pocketB = gz < -6 && gz > -12 && gx > -3 && gx < 6;
+  const pocketC = gx > 7 && gx < 12 && gz > -4 && gz < 4;
+  if (residentialBand && (pocketA || pocketB || pocketC)) return "neighborhood";
+  return "city";
+}
+
 function generateCity() {
   clearWorld();
   rng.reset(seed);
@@ -591,6 +617,7 @@ function generateCity() {
   towedVehicle = null;
   towLine.visible = false;
   busUnlocked = false;
+  heatCopTier = Math.floor(heat / 20);
 
   const block = blockSize;
   const cells = worldCells;
@@ -614,6 +641,7 @@ function generateCity() {
     for (let gz = -half; gz <= half; gz++) {
       const x = gx * block;
       const z = gz * block;
+      const biome = biomeForCell(gx, gz, half);
       if (isRoadCell(gx, gz)) {
         const isNorthSouth = gx % 3 === 0;
         const isEastWest = gz % 3 === 0;
@@ -627,6 +655,8 @@ function generateCity() {
         };
         roadCells.push(cell);
         roadMap.push(cell.position);
+        const roadBase = biome === "desert" ? makeBox(block + 1.2, 0.08, block + 1.2, mats.sand, x, -0.01, z) : biome === "park" ? makeBox(block + 1.2, 0.08, block + 1.2, mats.park, x, -0.01, z) : biome === "neighborhood" ? makeBox(block + 1.2, 0.08, block + 1.2, mats.lawn, x, -0.01, z) : null;
+        if (roadBase) world.add(roadBase);
         const road = makeBox(block + 1, 0.12, block + 1, mats.road, x, 0.02, z);
         road.receiveShadow = true;
         world.add(road);
@@ -645,7 +675,11 @@ function generateCity() {
           }
         }
         if (isIntersection) makeCrosswalks(x, z, block);
-      } else if ((Math.abs(gx * 17 + gz * 31 + seed) % 19 === 0) || (gx % 6 === 2 && gz % 6 === -2)) {
+      } else if (biome === "desert") {
+        makeDesertPatch(x, z, block);
+      } else if (biome === "neighborhood") {
+        makeNeighborhoodLot(x, z, block);
+      } else if (biome === "park" || (Math.abs(gx * 17 + gz * 31 + seed) % 19 === 0) || (gx % 6 === 2 && gz % 6 === -2)) {
         makePark(x, z, block);
       } else {
         const h = rng.range(10, 58);
@@ -677,18 +711,18 @@ function generateCity() {
   }
 
   const rampCells = roadCells.filter((cell) => !cell.isIntersection && (cell.gx % 3 === 0 || cell.gz % 3 === 0));
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < 24; i++) {
     const cell = rng.pick(rampCells);
     const sideOffset = cell.rampAngle === 0 ? new THREE.Vector3(rng.range(-4, 4), 0, rng.range(-3, 3)) : new THREE.Vector3(rng.range(-3, 3), 0, rng.range(-4, 4));
     const angle = cell.rampAngle + (rng.next() > 0.5 ? 0 : Math.PI);
     makeRamp(cell.position.x + sideOffset.x, cell.position.z + sideOffset.z, angle);
   }
 
-  for (let i = 0; i < 54; i++) {
+  for (let i = 0; i < 64; i++) {
     const p = rng.pick(roadMap);
-    const pickup = new THREE.Mesh(selectedRole === "cop" ? new THREE.TorusGeometry(1.45, 0.92, 12, 22) : new THREE.TorusGeometry(2.2, 0.55, 9, 18), selectedRole === "cop" ? mats.donut : mats.loot);
+    const pickup = selectedRole === "cop" ? makeDonutPickup() : makeCashPickup();
     pickup.position.set(p.x + rng.range(-7, 7), 2.2, p.z + rng.range(-7, 7));
-    pickup.rotation.x = Math.PI / 2;
+    if (selectedRole === "cop") pickup.rotation.x = Math.PI / 2;
     pickup.castShadow = true;
     pickup.userData.spin = rng.range(-2.5, 2.5);
     pickups.push(pickup);
@@ -696,7 +730,7 @@ function generateCity() {
   }
 
   const sidewalkCells = roadCells.filter((roadCell) => !roadCell.isIntersection && (roadCell.gx % 3 === 0 || roadCell.gz % 3 === 0));
-  for (let i = 0; i < 42; i++) {
+  for (let i = 0; i < 54; i++) {
     const cell = rng.pick(sidewalkCells) || rng.pick(roadCells);
     makePedestrian(cell);
   }
@@ -714,7 +748,7 @@ function generateCity() {
     car.group.rotation.y = car.angle;
   }
 
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 38; i++) {
     const car = makeCar("traffic", false);
     placeCar(car, rng.pick(roadMap));
     snapToStreetHeading(car);
@@ -734,6 +768,23 @@ function generateCity() {
     remoteCar = makeCar("criminal", false, mats.remote);
     remoteCar.name = "Remote";
   }
+}
+
+function makeDonutPickup() {
+  return new THREE.Mesh(new THREE.TorusGeometry(1.45, 0.92, 12, 22), mats.donut);
+}
+
+function makeCashPickup() {
+  const cash = new THREE.Group();
+  const bill = makeBox(4.4, 0.24, 2.35, mats.cash, 0, 0, 0);
+  const band = makeBox(0.62, 0.28, 2.62, mats.gold, 0, 0.05, 0);
+  const stem = makeBox(0.26, 0.36, 1.65, mats.white, 0, 0.25, 0);
+  const top = makeBox(1.25, 0.36, 0.25, mats.white, 0, 0.25, -0.58);
+  const mid = makeBox(1.18, 0.36, 0.25, mats.white, 0, 0.25, 0);
+  const bottom = makeBox(1.25, 0.36, 0.25, mats.white, 0, 0.25, 0.58);
+  cash.add(bill, band, stem, top, mid, bottom);
+  cash.rotation.y = rng.range(0, Math.PI * 2);
+  return cash;
 }
 
 function placeCar(car, point) {
@@ -796,7 +847,11 @@ function makePark(x, z, block) {
     park.add(pond);
   }
 
-  for (let i = 0; i < rng.range(4, 8); i++) {
+  if (rng.next() > 0.58) {
+    addPlayground(park, block);
+  }
+
+  for (let i = 0; i < rng.range(6, 11); i++) {
     const tree = new THREE.Group();
     const trunk = makeBox(0.9, rng.range(2, 3.5), 0.9, mats.trunk, 0, 1.1, 0);
     const crown = new THREE.Mesh(new THREE.DodecahedronGeometry(rng.range(1.8, 2.8), 0), mats.tree);
@@ -816,6 +871,181 @@ function makePark(x, z, block) {
   parks.push(park);
   world.add(park);
   return park;
+}
+
+function addPlayground(park, block) {
+  const playground = new THREE.Group();
+  playground.position.set(rng.range(-block * 0.16, block * 0.16), 0, rng.range(-block * 0.16, block * 0.16));
+
+  const pad = makeBox(13.2, 0.14, 10.2, mats.desertRock, 0, 0.14, 0);
+  const slideDeck = makeBox(2.6, 1.1, 2.6, mats.playgroundBlue, -2.8, 1.05, -0.8);
+  const slide = makeBox(2.0, 0.22, 5.3, mats.playground, -2.8, 0.72, 2.2);
+  slide.rotation.x = -0.32;
+  const ladderA = makeBox(0.22, 2.3, 0.22, mats.white, -4.1, 1.25, -2.1);
+  const ladderB = makeBox(0.22, 2.3, 0.22, mats.white, -1.5, 1.25, -2.1);
+  const swingTop = makeBox(5.2, 0.22, 0.28, mats.white, 3.2, 2.8, -1.4);
+  const swingLegA = makeBox(0.24, 2.8, 0.24, mats.white, 0.8, 1.42, -1.4);
+  const swingLegB = makeBox(0.24, 2.8, 0.24, mats.white, 5.6, 1.42, -1.4);
+  const seatA = makeBox(1.25, 0.16, 0.55, mats.tire, 2.4, 1.2, -1.4);
+  const seatB = makeBox(1.25, 0.16, 0.55, mats.tire, 4.2, 1.2, -1.4);
+  playground.add(pad, slideDeck, slide, ladderA, ladderB, swingTop, swingLegA, swingLegB, seatA, seatB);
+  playground.userData.radius = 6.5;
+  playground.userData.maxHealth = 70;
+  playground.userData.health = 70;
+  playground.userData.destructible = true;
+  obstacles.push(playground);
+  park.add(playground);
+}
+
+function makeNeighborhoodLot(x, z, block) {
+  const lot = new THREE.Group();
+  lot.position.set(x, 0, z);
+  const lawn = makeBox(block * 0.94, 0.18, block * 0.94, mats.lawn, 0, 0.05, 0);
+  const drivewaySide = rng.next() > 0.5 ? 1 : -1;
+  const driveway = makeBox(4.6, 0.12, block * 0.62, mats.sidewalk, drivewaySide * block * 0.28, 0.16, -block * 0.05);
+  lot.add(lawn, driveway);
+
+  const house = makeHouse();
+  house.position.set(rng.range(-3.5, 3.5), 0, rng.range(-2.5, 4.5));
+  house.rotation.y = rng.pick([0, Math.PI / 2, Math.PI, Math.PI * 1.5]);
+  house.userData.radius = 7.2;
+  house.userData.maxHealth = 95;
+  house.userData.health = 95;
+  house.userData.destructible = true;
+  obstacles.push(house);
+  buildings.push(house);
+  lot.add(house);
+
+  addFenceRun(lot, block, -block * 0.43, -block * 0.43, block * 0.43, true);
+  addFenceRun(lot, block, block * 0.43, -block * 0.43, block * 0.43, true);
+  addFenceRun(lot, block, -block * 0.43, -block * 0.43, block * 0.43, false);
+
+  const mailbox = new THREE.Group();
+  mailbox.add(makeBox(0.22, 1.0, 0.22, mats.white, 0, 0.55, 0));
+  mailbox.add(makeBox(0.9, 0.45, 0.55, rng.pick([mats.cop, mats.criminal, mats.gold]), 0, 1.15, 0));
+  mailbox.position.set(-drivewaySide * block * 0.28, 0, -block * 0.38);
+  lot.add(mailbox);
+
+  if (rng.next() > 0.45) {
+    const parked = makeBox(3.5, 1.0, 5.8, rng.pick(trafficMats), drivewaySide * block * 0.28, 0.85, -block * 0.22);
+    const cab = makeBox(2.4, 0.85, 2.4, mats.glass, drivewaySide * block * 0.28, 1.65, -block * 0.25);
+    lot.add(parked, cab);
+  }
+
+  parks.push(lot);
+  world.add(lot);
+  return lot;
+}
+
+function makeHouse() {
+  const house = new THREE.Group();
+  const wallMat = rng.next() > 0.45 ? mats.houseWall : new THREE.MeshStandardMaterial({ color: new THREE.Color().setHSL(rng.range(0.05, 0.14), rng.range(0.22, 0.42), rng.range(0.58, 0.76)), roughness: 0.76 });
+  const body = makeBox(10.8, 4.2, 8.6, wallMat, 0, 2.1, 0);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(7.8, 3.1, 4), mats.houseRoof);
+  roof.position.set(0, 5.55, 0);
+  roof.rotation.y = Math.PI / 4;
+  roof.scale.z = 0.82;
+  roof.castShadow = true;
+  roof.receiveShadow = true;
+  const door = makeBox(1.55, 2.45, 0.18, mats.wood, -2.6, 1.35, -4.42);
+  const windowA = makeFlatPanel(1.45, 1.05, 0.1, mats.windowLit, 1.2, 2.45, -4.48);
+  const windowB = makeFlatPanel(1.45, 1.05, 0.1, mats.windowCool, 3.45, 2.45, -4.48);
+  const stoop = makeBox(3.6, 0.32, 2.0, mats.sidewalk, -2.6, 0.22, -5.15);
+  house.add(body, roof, door, windowA, windowB, stoop);
+  return house;
+}
+
+function addFenceRun(parent, block, fixed, start, end, vertical) {
+  const count = 5;
+  for (let i = 0; i < count; i++) {
+    const t = start + (end - start) * (i / (count - 1));
+    const x = vertical ? fixed : t;
+    const z = vertical ? t : fixed;
+    parent.add(makeBox(vertical ? 0.28 : 3.8, 0.75, vertical ? 3.8 : 0.28, mats.fence, x, 0.45, z));
+  }
+}
+
+function makeDesertPatch(x, z, block) {
+  const desert = new THREE.Group();
+  desert.position.set(x, 0, z);
+  const base = makeBox(block * 0.96, 0.22, block * 0.96, mats.sand, 0, 0.05, 0);
+  base.receiveShadow = true;
+  desert.add(base);
+
+  if (rng.next() > 0.48) {
+    addWildWestSet(desert, block);
+  }
+
+  for (let i = 0; i < rng.range(4, 8); i++) {
+    const cactus = makeCactus();
+    cactus.position.set(rng.range(-block * 0.36, block * 0.36), 0, rng.range(-block * 0.36, block * 0.36));
+    cactus.rotation.y = rng.range(0, Math.PI * 2);
+    cactus.userData.radius = 1.55;
+    cactus.userData.maxHealth = 45;
+    cactus.userData.health = 45;
+    cactus.userData.destructible = true;
+    obstacles.push(cactus);
+    desert.add(cactus);
+  }
+
+  for (let i = 0; i < rng.range(4, 9); i++) {
+    const rock = new THREE.Mesh(new THREE.DodecahedronGeometry(rng.range(0.8, 1.8), 0), mats.desertRock);
+    rock.position.set(rng.range(-block * 0.4, block * 0.4), rng.range(0.25, 0.6), rng.range(-block * 0.4, block * 0.4));
+    rock.rotation.set(rng.range(-0.3, 0.3), rng.range(0, Math.PI), rng.range(-0.3, 0.3));
+    rock.castShadow = true;
+    rock.receiveShadow = true;
+    desert.add(rock);
+  }
+
+  parks.push(desert);
+  world.add(desert);
+  return desert;
+}
+
+function addWildWestSet(desert, block) {
+  const set = new THREE.Group();
+  set.position.set(rng.range(-block * 0.18, block * 0.18), 0, rng.range(-block * 0.18, block * 0.18));
+  set.rotation.y = rng.pick([0, Math.PI / 2, Math.PI, Math.PI * 1.5]);
+
+  const saloon = makeBox(8.4, 4.2, 5.8, mats.wood, 0, 2.1, 0);
+  const falseFront = makeBox(9.2, 2.8, 0.52, mats.wood, 0, 5.35, -3.15);
+  const porch = makeBox(10.4, 0.35, 2.8, mats.desertRock, 0, 0.32, -4.35);
+  const sign = makeBox(5.2, 0.9, 0.28, mats.gold, 0, 4.65, -3.48);
+  const trough = makeBox(5.6, 0.72, 1.2, mats.desertRock, -6.8, 0.62, -2.3);
+  const railA = makeBox(0.28, 1.3, 7.0, mats.wood, 6.7, 0.92, -1.2);
+  const railB = makeBox(0.28, 1.3, 7.0, mats.wood, -6.7, 0.92, -1.2);
+  set.add(saloon, falseFront, porch, sign, trough, railA, railB);
+  set.userData.radius = 8.5;
+  set.userData.maxHealth = 115;
+  set.userData.health = 115;
+  set.userData.destructible = true;
+  obstacles.push(set);
+  desert.add(set);
+}
+
+function makeCactus() {
+  const cactus = new THREE.Group();
+  const height = rng.range(4.2, 7.4);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.72, height, 10), mats.cactus);
+  trunk.position.y = height / 2;
+  trunk.castShadow = true;
+  cactus.add(trunk);
+
+  for (const side of [-1, 1]) {
+    if (rng.next() < 0.24) continue;
+    const armHeight = rng.range(height * 0.42, height * 0.72);
+    const upper = rng.range(1.3, 2.4);
+    const horizontal = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.4, 2.2, 8), mats.cactus);
+    horizontal.rotation.z = Math.PI / 2;
+    horizontal.position.set(side * 1.08, armHeight, 0);
+    horizontal.castShadow = true;
+    const vertical = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, upper, 8), mats.cactus);
+    vertical.position.set(side * 2.05, armHeight + upper * 0.45, 0);
+    vertical.castShadow = true;
+    cactus.add(horizontal, vertical);
+  }
+
+  return cactus;
 }
 
 function nearestRoadCell(pos) {
@@ -1212,6 +1442,30 @@ function addScore(points) {
   totalScore += points;
   localStorage.setItem("neon-badge-runner-total", String(Math.floor(totalScore)));
   maybeUpgradePlayerVehicle();
+}
+
+function updateHeatCopSpawns() {
+  const tier = Math.min(5, Math.floor(heat / 20));
+  if (tier <= heatCopTier) return;
+  const criminal = findCriminalTarget();
+  const anchor = criminal?.group.position || player.group.position;
+  for (let level = heatCopTier + 1; level <= tier; level++) {
+    spawnHeatCopUnit(level, anchor);
+  }
+  heatCopTier = tier;
+}
+
+function spawnHeatCopUnit(level, anchor) {
+  const car = makeCar("cop", false);
+  car.name = `Heat Unit ${level}`;
+  respawnNpcNearAnchor(car, anchor);
+  car.npcScore = level * 165;
+  maybeUpgradeNpcVehicle(car);
+  car.speed = rng.range(38, 56) + level * 3;
+  car.cooldown = 0.4;
+  if (player.role === "criminal" || player.group.position.distanceTo(anchor) < 180) {
+    announce(`Heat ${Math.floor(heat)}: extra cop unit dispatched.`);
+  }
 }
 
 function maybeUpgradePlayerVehicle() {
@@ -1657,6 +1911,7 @@ function updateUi() {
   ui.score.textContent = String(Math.floor(score));
   ui.totalScore.textContent = String(Math.floor(totalScore));
   ui.health.textContent = `${Math.ceil(player.health)}/${Math.ceil(player.maxHealth)}`;
+  ui.health.parentElement.style.setProperty("--health", `${THREE.MathUtils.clamp((player.health / player.maxHealth) * 100, 0, 100)}%`);
   ui.heat.textContent = String(Math.floor(heat));
   const min = Math.floor(remaining / 60).toString().padStart(2, "0");
   const sec = Math.floor(remaining % 60).toString().padStart(2, "0");
@@ -1714,6 +1969,7 @@ function resetRound(newSeed = false) {
   if (newSeed) seed = Math.floor(Math.random() * 999999);
   score = 0;
   heat = selectedRole === "criminal" ? 18 : 0;
+  heatCopTier = Math.floor(heat / 20);
   remaining = 180;
   paused = false;
   ui.gameOver.classList.add("hidden");
@@ -1758,6 +2014,7 @@ function animate() {
     updatePedestrians(dt);
     updateTowCable(dt);
     recycleDistantNpcs();
+    updateHeatCopSpawns();
     handleInteractions(dt);
     updateCamera(dt);
     updateUi();

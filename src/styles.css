@@ -173,8 +173,27 @@ button:hover {
   z-index: 5;
   display: grid;
   grid-template-columns: repeat(6, minmax(72px, 1fr));
-  gap: 8px;
+  gap: 0;
   max-width: min(820px, calc(100vw - 96px));
+  border: 1px solid var(--line);
+  border-left: 5px solid var(--gold);
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    linear-gradient(135deg, rgba(54, 231, 212, 0.13), transparent 32%),
+    rgba(16, 16, 20, 0.78);
+  backdrop-filter: blur(10px);
+  box-shadow: 7px 7px 0 rgba(0, 0, 0, 0.42);
+}
+
+.hud .health-stat {
+  grid-column: 1 / -1;
+  order: 10;
+  min-height: 30px;
+  padding: 7px 92px 7px 13px;
+  border-top: 1px solid var(--line);
+  border-right: 0;
+  background: rgba(0, 0, 0, 0.28);
 }
 
 .stat,
@@ -187,9 +206,40 @@ button:hover {
 }
 
 .stat {
-  min-height: 62px;
-  padding: 9px 10px;
-  border-radius: 8px;
+  position: relative;
+  min-height: 58px;
+  padding: 9px 13px 8px;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+}
+
+.stat:last-child {
+  border-right: 0;
+}
+
+.stat::after {
+  content: "";
+  position: absolute;
+  left: 11px;
+  right: 11px;
+  bottom: 6px;
+  height: 2px;
+  background: linear-gradient(90deg, var(--cyan), transparent);
+  opacity: 0.55;
+}
+
+.health-stat::after {
+  left: 72px;
+  right: 13px;
+  bottom: 9px;
+  height: 10px;
+  border: 1px solid rgba(245, 231, 184, 0.34);
+  background:
+    linear-gradient(90deg, var(--signal), var(--gold), #7dff91) 0 0 / var(--health, 100%) 100% no-repeat,
+    rgba(0, 0, 0, 0.52);
+  opacity: 1;
+  z-index: 0;
 }
 
 .stat strong {
@@ -206,6 +256,20 @@ button:hover {
 }
 
 .health-stat strong {
+  position: absolute;
+  z-index: 1;
+  right: 13px;
+  bottom: 4px;
+  margin: 0;
+  color: var(--paper);
+  font-size: 18px;
+  line-height: 1;
+  text-shadow: 2px 2px 0 rgba(0, 0, 0, 0.75);
+}
+
+.health-stat span {
+  position: relative;
+  z-index: 1;
   color: #7dff91;
 }
 
@@ -254,23 +318,47 @@ button:hover {
   bottom: 16px;
   z-index: 6;
   width: min(520px, calc(100vw - 32px));
-  padding: 12px;
+  padding: 12px 12px 14px 98px;
   border-radius: 8px;
+  border: 2px solid var(--signal);
+  border-left-width: 0;
   font-weight: 800;
+  box-shadow: 7px 7px 0 rgba(0, 0, 0, 0.42);
+}
+
+.radio::before {
+  content: "BREAKING";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 82px;
+  display: grid;
+  place-items: center;
+  background: var(--signal);
+  color: var(--paper);
+  font-family: Impact, Haettenschweiler, "Arial Narrow Bold", sans-serif;
+  letter-spacing: 0;
+  font-size: 18px;
+  writing-mode: vertical-rl;
+  transform: rotate(180deg);
 }
 
 .meters {
-  height: 8px;
+  position: absolute;
+  left: 82px;
+  right: 0;
+  bottom: 0;
+  height: 6px;
   margin-top: 10px;
-  border: 1px solid var(--line);
-  background: rgba(0, 0, 0, 0.4);
+  border: 0;
+  background: repeating-linear-gradient(90deg, var(--gold) 0 14px, var(--signal) 14px 28px, var(--ink) 28px 32px);
 }
 
 .meters span {
-  display: block;
+  display: none;
   width: 100%;
   height: 100%;
-  background: linear-gradient(90deg, var(--cyan), var(--gold), var(--signal));
 }
 
 .multiplayer {
@@ -278,9 +366,53 @@ button:hover {
   right: 16px;
   bottom: 16px;
   z-index: 6;
-  width: min(330px, calc(100vw - 32px));
-  padding: 12px;
+  width: min(340px, calc(100vw - 32px));
   border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 7px 7px 0 rgba(0, 0, 0, 0.42);
+}
+
+.multiplayer summary {
+  min-height: 52px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;
+  background: linear-gradient(90deg, rgba(54, 231, 212, 0.18), rgba(249, 199, 79, 0.1));
+}
+
+.multiplayer summary::-webkit-details-marker {
+  display: none;
+}
+
+.multiplayer summary::after {
+  content: "+";
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--gold);
+  font-weight: 900;
+}
+
+.multiplayer[open] summary::after {
+  content: "-";
+}
+
+.multiplayer summary strong {
+  justify-self: end;
+  font-size: 13px;
+  color: rgba(245, 231, 184, 0.9);
+}
+
+.mp-body {
+  padding: 12px;
+  border-top: 1px solid var(--line);
 }
 
 .multiplayer input {
@@ -344,7 +476,9 @@ button:hover {
   }
 
   .multiplayer {
-    display: none;
+    right: 12px;
+    bottom: 12px;
+    width: min(300px, calc(100vw - 24px));
   }
 
   .splash {

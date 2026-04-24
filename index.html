@@ -75,19 +75,24 @@
         </div>
       </section>
 
-      <section class="multiplayer">
-        <div class="panel-title">Multiplayer</div>
-        <div class="mp-row">
-          <button id="hostBtn">Host</button>
-          <input id="roomInput" placeholder="room code" autocomplete="off" />
-          <button id="joinBtn">Join</button>
+      <details class="multiplayer">
+        <summary>
+          <span class="panel-title">Multiplayer</span>
+          <strong>Link chase</strong>
+        </summary>
+        <div class="mp-body">
+          <div class="mp-row">
+            <button id="hostBtn">Host</button>
+            <input id="roomInput" placeholder="room code" autocomplete="off" />
+            <button id="joinBtn">Join</button>
+          </div>
+          <label class="toggle">
+            <input id="localP2" type="checkbox" />
+            <span>Local P2</span>
+          </label>
+          <p id="mpStatus">Solo chaos online.</p>
         </div>
-        <label class="toggle">
-          <input id="localP2" type="checkbox" />
-          <span>Local P2</span>
-        </label>
-        <p id="mpStatus">Solo chaos online.</p>
-      </section>
+      </details>
 
       <section id="gameOver" class="game-over hidden">
         <span>Shift complete</span>
